@@ -9,7 +9,13 @@ npm install
 npm run dev
 ```
 
-Se quiser sobrescrever a conexao padrao do Supabase, copie `.env.example` para `.env.local`.
+As configuracoes do Supabase podem vir de:
+
+- `.env.development` para desenvolvimento
+- `.env.production` para producao
+- `.env.local` para sobrescrever localmente
+
+O projeto aceita tanto variaveis `VITE_*` quanto `NEXT_PUBLIC_*`, mas no Vite o padrao recomendado e `VITE_*`.
 
 ## Build
 
@@ -19,7 +25,7 @@ npm run build
 
 ## Supabase
 
-Este projeto usa o mesmo projeto Supabase do aplicativo Flutter por padrao.
+Este projeto usa ambientes separados de Supabase para desenvolvimento e producao.
 
 1. Abra o SQL Editor do Supabase.
 2. Rode o script `supabase/schema.sql`.
