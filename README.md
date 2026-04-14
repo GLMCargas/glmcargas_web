@@ -23,6 +23,24 @@ O projeto aceita tanto variaveis `VITE_*` quanto `NEXT_PUBLIC_*`, mas no Vite o 
 npm run build
 ```
 
+## Firebase Hosting
+
+O projeto esta preparado para publicar no Firebase Hosting com GitHub Actions.
+
+Arquivos adicionados:
+
+- `firebase.json` com SPA rewrite para `index.html`
+- `.github/workflows/firebase-preview.yml` para previews em pull requests
+- `.github/workflows/firebase-dev.yml` para publicar a branch `dev` no canal `dev`
+- `.github/workflows/firebase-production.yml` para publicar a branch `production` no canal `live`
+
+No GitHub, configure:
+
+- repository variable `FIREBASE_PROJECT_ID`
+- repository secret `FIREBASE_SERVICE_ACCOUNT`
+
+O `FIREBASE_SERVICE_ACCOUNT` deve conter o JSON completo da service account com permissao de deploy no Firebase Hosting.
+
 ## Supabase
 
 Este projeto usa ambientes separados de Supabase para desenvolvimento e producao.
