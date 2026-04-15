@@ -1,0 +1,17 @@
+{
+  "projects": {
+    "default": "glmcargas-web"
+  },
+  "targets": {
+    "glmcargas-web": {
+      "hosting": {
+        "production": [
+          "glmcargas-web"
+        ],
+        "dev": [
+          "glmcargas-web-dev"
+        ]
+      }
+    }
+  }
+}

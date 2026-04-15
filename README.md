@@ -30,9 +30,10 @@ O projeto esta preparado para publicar no Firebase Hosting com GitHub Actions.
 Arquivos adicionados:
 
 - `firebase.json` com SPA rewrite para `index.html`
+- `.firebaserc` com targets `production` e `dev`
 - `.github/workflows/firebase-preview.yml` para previews em pull requests
-- `.github/workflows/firebase-dev.yml` para publicar a branch `dev` no canal `dev`
-- `.github/workflows/firebase-production.yml` para publicar a branch `production` no canal `live`
+- `.github/workflows/firebase-dev.yml` para publicar a branch `dev` no site `glmcargas-web-dev`
+- `.github/workflows/firebase-production.yml` para publicar a branch `production` no site `glmcargas-web`
 
 No GitHub, configure:
 
@@ -40,6 +41,11 @@ No GitHub, configure:
 - repository secret `FIREBASE_SERVICE_ACCOUNT`
 
 O `FIREBASE_SERVICE_ACCOUNT` deve conter o JSON completo da service account com permissao de deploy no Firebase Hosting.
+
+No Firebase Hosting, os deploys estao separados por site:
+
+- `production` -> `glmcargas-web`
+- `dev` -> `glmcargas-web-dev`
 
 ## Supabase
 
