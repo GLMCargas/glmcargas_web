@@ -59,13 +59,34 @@ O script cria:
 
 - `public.empresas_web`
 - `public.cargas_web`
+- `public.candidaturas_web`
+- `public.salvar_empresa_web(...)`
 - `public.publicar_carga_web(...)`
+- `public.listar_cargas_disponiveis_web(...)`
+- `public.aceitar_carga_web(...)`
+- `public.minhas_cargas_aceitas_web()`
+- `public.empresa_listar_aceites_carga_web(...)`
 
-O front envia o formulario para a RPC `publicar_carga_web`, que exige usuario autenticado, faz o upsert da empresa e grava a carga.
+O front atual continua usando a RPC `publicar_carga_web`, que exige usuario autenticado, garante o perfil de empresa e grava a carga.
 
 ## Login
 
-O portal web agora usa `Supabase Auth` com e-mail e senha. A empresa precisa estar autenticada para publicar cargas.
+O portal web usa `Supabase Auth` com e-mail e senha.
+
+- empresa autenticada pode publicar e administrar suas cargas
+- motorista autenticado pode consultar e aceitar cargas por outro cliente, como o app Flutter
+
+Este projeto web nao mantem cadastro de motorista. A parte do motorista deve consumir as RPCs do schema usando o mesmo `auth.users.id` do Supabase.
+
+## Motorista por Flutter
+
+Para o projeto Flutter do motorista, o fluxo esperado e:
+
+- listar cargas publicadas com `public.listar_cargas_disponiveis_web(...)`
+- aceitar uma carga com `public.aceitar_carga_web(...)`
+- listar as cargas ja aceitas com `public.minhas_cargas_aceitas_web()`
+
+A tabela `public.candidaturas_web` guarda o aceite do motorista e tambem um snapshot opcional dos dados enviados no momento do aceite, como nome, telefone, cidade base, tipo de veiculo e RNTRC/ANTT.
 
 ## Dashboard
 
