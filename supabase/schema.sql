@@ -72,12 +72,23 @@ create table if not exists public.web_admin_users (
   created_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.chat_messages_web (
+  id uuid primary key default gen_random_uuid(),
+  candidatura_id uuid not null references public.candidaturas_web(id) on delete cascade,
+  sender_auth_user_id uuid not null references auth.users(id) on delete cascade,
+  sender_role text not null check (sender_role in ('empresa', 'motorista')),
+  mensagem text not null,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
 create index if not exists cargas_web_empresa_id_idx on public.cargas_web (empresa_id);
 create index if not exists cargas_web_status_idx on public.cargas_web (status);
 create index if not exists cargas_web_origem_idx on public.cargas_web (uf_coleta, cidade_coleta);
 create index if not exists candidaturas_web_carga_id_idx on public.candidaturas_web (carga_id);
 create index if not exists candidaturas_web_motorista_auth_user_id_idx on public.candidaturas_web (motorista_auth_user_id);
 create index if not exists candidaturas_web_status_idx on public.candidaturas_web (status);
+create index if not exists chat_messages_web_candidatura_id_created_at_idx on public.chat_messages_web (candidatura_id, created_at);
+create index if not exists chat_messages_web_sender_auth_user_id_idx on public.chat_messages_web (sender_auth_user_id);
 
 drop trigger if exists empresas_web_set_updated_at on public.empresas_web;
 create trigger empresas_web_set_updated_at
@@ -101,6 +112,7 @@ alter table public.empresas_web enable row level security;
 alter table public.cargas_web enable row level security;
 alter table public.candidaturas_web enable row level security;
 alter table public.web_admin_users enable row level security;
+alter table public.chat_messages_web enable row level security;
 
 drop policy if exists "service_role_manage_empresas_web" on public.empresas_web;
 create policy "service_role_manage_empresas_web"
@@ -129,6 +141,14 @@ with check (true);
 drop policy if exists "service_role_manage_web_admin_users" on public.web_admin_users;
 create policy "service_role_manage_web_admin_users"
 on public.web_admin_users
+for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "service_role_manage_chat_messages_web" on public.chat_messages_web;
+create policy "service_role_manage_chat_messages_web"
+on public.chat_messages_web
 for all
 to service_role
 using (true)
@@ -174,6 +194,25 @@ using (
     join public.empresas_web e on e.id = c.empresa_id
     where c.id = candidaturas_web.carga_id
       and e.auth_user_id = auth.uid()
+  )
+);
+
+drop policy if exists "authenticated_select_own_chat_messages_web" on public.chat_messages_web;
+create policy "authenticated_select_own_chat_messages_web"
+on public.chat_messages_web
+for select
+to authenticated
+using (
+  exists (
+    select 1
+    from public.candidaturas_web cd
+    join public.cargas_web c on c.id = cd.carga_id
+    join public.empresas_web e on e.id = c.empresa_id
+    where cd.id = chat_messages_web.candidatura_id
+      and (
+        cd.motorista_auth_user_id = auth.uid()
+        or e.auth_user_id = auth.uid()
+      )
   )
 );
 
@@ -950,6 +989,225 @@ $$;
 
 revoke all on function public.atualizar_status_candidatura_web(uuid, text) from public;
 grant execute on function public.atualizar_status_candidatura_web(uuid, text) to authenticated, service_role;
+
+create or replace function public.empresa_listar_conversas_chat_web()
+returns table (
+  candidatura_id uuid,
+  status text,
+  carga_id uuid,
+  carga_produto text,
+  carga_origem text,
+  carga_destino text,
+  motorista_auth_user_id uuid,
+  motorista_nome text,
+  motorista_telefone text,
+  motorista_email text,
+  ultima_mensagem text,
+  ultima_mensagem_em timestamptz,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  return query
+  select
+    cd.id as candidatura_id,
+    cd.status,
+    c.id as carga_id,
+    c.produto as carga_produto,
+    c.cidade_coleta || '/' || c.uf_coleta as carga_origem,
+    c.cidade_entrega || '/' || c.uf_entrega as carga_destino,
+    cd.motorista_auth_user_id,
+    cd.motorista_nome,
+    cd.motorista_telefone,
+    cd.motorista_email,
+    last_message.mensagem as ultima_mensagem,
+    last_message.created_at as ultima_mensagem_em,
+    cd.created_at
+  from public.candidaturas_web cd
+  join public.cargas_web c on c.id = cd.carga_id
+  join public.empresas_web e on e.id = c.empresa_id
+  left join lateral (
+    select cm.mensagem, cm.created_at
+    from public.chat_messages_web cm
+    where cm.candidatura_id = cd.id
+    order by cm.created_at desc
+    limit 1
+  ) last_message on true
+  where e.auth_user_id = auth.uid()
+  order by coalesce(last_message.created_at, cd.created_at) desc;
+end;
+$$;
+
+revoke all on function public.empresa_listar_conversas_chat_web() from public;
+grant execute on function public.empresa_listar_conversas_chat_web() to authenticated, service_role;
+
+create or replace function public.motorista_listar_conversas_chat_web()
+returns table (
+  candidatura_id uuid,
+  status text,
+  carga_id uuid,
+  empresa_nome text,
+  carga_produto text,
+  carga_origem text,
+  carga_destino text,
+  ultima_mensagem text,
+  ultima_mensagem_em timestamptz,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  return query
+  select
+    cd.id as candidatura_id,
+    cd.status,
+    c.id as carga_id,
+    e.nome as empresa_nome,
+    c.produto as carga_produto,
+    c.cidade_coleta || '/' || c.uf_coleta as carga_origem,
+    c.cidade_entrega || '/' || c.uf_entrega as carga_destino,
+    last_message.mensagem as ultima_mensagem,
+    last_message.created_at as ultima_mensagem_em,
+    cd.created_at
+  from public.candidaturas_web cd
+  join public.cargas_web c on c.id = cd.carga_id
+  join public.empresas_web e on e.id = c.empresa_id
+  left join lateral (
+    select cm.mensagem, cm.created_at
+    from public.chat_messages_web cm
+    where cm.candidatura_id = cd.id
+    order by cm.created_at desc
+    limit 1
+  ) last_message on true
+  where cd.motorista_auth_user_id = auth.uid()
+  order by coalesce(last_message.created_at, cd.created_at) desc;
+end;
+$$;
+
+revoke all on function public.motorista_listar_conversas_chat_web() from public;
+grant execute on function public.motorista_listar_conversas_chat_web() to authenticated, service_role;
+
+create or replace function public.listar_mensagens_chat_web(
+  p_candidatura_id uuid
+)
+returns table (
+  id uuid,
+  candidatura_id uuid,
+  sender_auth_user_id uuid,
+  sender_role text,
+  mensagem text,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.candidaturas_web cd
+    join public.cargas_web c on c.id = cd.carga_id
+    join public.empresas_web e on e.id = c.empresa_id
+    where cd.id = p_candidatura_id
+      and (
+        cd.motorista_auth_user_id = auth.uid()
+        or e.auth_user_id = auth.uid()
+      )
+  ) then
+    raise exception 'Conversa nao encontrada para o usuario autenticado.';
+  end if;
+
+  return query
+  select
+    cm.id,
+    cm.candidatura_id,
+    cm.sender_auth_user_id,
+    cm.sender_role,
+    cm.mensagem,
+    cm.created_at
+  from public.chat_messages_web cm
+  where cm.candidatura_id = p_candidatura_id
+  order by cm.created_at asc;
+end;
+$$;
+
+revoke all on function public.listar_mensagens_chat_web(uuid) from public;
+grant execute on function public.listar_mensagens_chat_web(uuid) to authenticated, service_role;
+
+create or replace function public.enviar_mensagem_chat_web(
+  p_candidatura_id uuid,
+  p_mensagem text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sender_role text;
+  v_message_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if trim(coalesce(p_mensagem, '')) = '' then
+    raise exception 'Mensagem vazia.';
+  end if;
+
+  select
+    case
+      when e.auth_user_id = auth.uid() then 'empresa'
+      when cd.motorista_auth_user_id = auth.uid() then 'motorista'
+      else null
+    end
+  into v_sender_role
+  from public.candidaturas_web cd
+  join public.cargas_web c on c.id = cd.carga_id
+  join public.empresas_web e on e.id = c.empresa_id
+  where cd.id = p_candidatura_id;
+
+  if v_sender_role is null then
+    raise exception 'Conversa nao encontrada para o usuario autenticado.';
+  end if;
+
+  insert into public.chat_messages_web (
+    candidatura_id,
+    sender_auth_user_id,
+    sender_role,
+    mensagem
+  )
+  values (
+    p_candidatura_id,
+    auth.uid(),
+    v_sender_role,
+    trim(p_mensagem)
+  )
+  returning id into v_message_id;
+
+  return v_message_id;
+end;
+$$;
+
+revoke all on function public.enviar_mensagem_chat_web(uuid, text) from public;
+grant execute on function public.enviar_mensagem_chat_web(uuid, text) to authenticated, service_role;
 
 create or replace function public.is_web_admin()
 returns boolean

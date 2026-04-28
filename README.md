@@ -39,6 +39,10 @@ No GitHub, configure:
 
 - repository variable `FIREBASE_PROJECT_ID`
 - repository secret `FIREBASE_SERVICE_ACCOUNT`
+- repository variable `VITE_SUPABASE_URL` para producao
+- repository secret `VITE_SUPABASE_PUBLISHABLE_KEY` para producao
+- repository variable `VITE_SUPABASE_DEV_URL` para desenvolvimento e previews
+- repository secret `VITE_SUPABASE_DEV_PUBLISHABLE_KEY` para desenvolvimento e previews
 
 O `FIREBASE_SERVICE_ACCOUNT` deve conter o JSON completo da service account com permissao de deploy no Firebase Hosting.
 
@@ -87,6 +91,24 @@ Para o projeto Flutter do motorista, o fluxo esperado e:
 - listar as cargas ja aceitas com `public.minhas_cargas_aceitas_web()`
 
 A tabela `public.candidaturas_web` guarda o aceite do motorista e tambem um snapshot opcional dos dados enviados no momento do aceite, como nome, telefone, cidade base, tipo de veiculo e RNTRC/ANTT.
+
+## Chat empresa-motorista
+
+O chat usa a candidatura como conversa. Depois que o motorista aceita uma carga, o `candidatura_id` passa a ser o identificador do canal entre a empresa dona da carga e o motorista.
+
+RPCs para o portal da empresa:
+
+- `public.empresa_listar_conversas_chat_web()` lista as conversas das cargas da empresa autenticada
+- `public.listar_mensagens_chat_web(p_candidatura_id)` lista as mensagens da conversa
+- `public.enviar_mensagem_chat_web(p_candidatura_id, p_mensagem)` envia mensagem como empresa
+
+RPCs para o app Flutter do motorista:
+
+- `public.motorista_listar_conversas_chat_web()` lista as conversas das cargas aceitas pelo motorista autenticado
+- `public.listar_mensagens_chat_web(p_candidatura_id)` lista as mensagens da conversa
+- `public.enviar_mensagem_chat_web(p_candidatura_id, p_mensagem)` envia mensagem como motorista
+
+A tabela `public.chat_messages_web` guarda as mensagens e identifica o remetente com `sender_role`, usando `empresa` ou `motorista`. As funcoes validam o usuario autenticado antes de listar ou enviar mensagens.
 
 ## Dashboard
 
