@@ -31,6 +31,9 @@ jobs:
 
       - name: Build app
         run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_DEV_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_DEV_PUBLISHABLE_KEY }}
 
       - name: Deploy preview channel
         uses: FirebaseExtended/action-hosting-deploy@v0
