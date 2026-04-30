@@ -106,6 +106,31 @@ type CompanyProfileRow = {
   email: string | null
 }
 
+type ChatThread = {
+  candidatura_id: string
+  status: string
+  carga_id: string
+  carga_produto: string
+  carga_origem: string
+  carga_destino: string
+  motorista_auth_user_id: string
+  motorista_nome: string | null
+  motorista_telefone: string | null
+  motorista_email: string | null
+  ultima_mensagem: string | null
+  ultima_mensagem_em: string | null
+  created_at: string
+}
+
+type ChatMessage = {
+  id: string
+  candidatura_id: string
+  sender_auth_user_id: string
+  sender_role: 'empresa' | 'motorista'
+  mensagem: string
+  created_at: string
+}
+
 function parseCurrencyToNumber(value: string) {
   const normalized = value.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')
   const parsed = Number(normalized)
@@ -224,6 +249,17 @@ function App() {
   const [adminError, setAdminError] = useState('')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState<ActiveSection>('cargas')
+  const [isSavingProfile, setIsSavingProfile] = useState(false)
+  const [profileMessage, setProfileMessage] = useState('')
+  const [profileError, setProfileError] = useState('')
+  const [chatThreads, setChatThreads] = useState<ChatThread[]>([])
+  const [activeChatId, setActiveChatId] = useState<string | null>(null)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatDraft, setChatDraft] = useState('')
+  const [isLoadingChats, setIsLoadingChats] = useState(false)
+  const [isLoadingChatMessages, setIsLoadingChatMessages] = useState(false)
+  const [isSendingChatMessage, setIsSendingChatMessage] = useState(false)
+  const [chatError, setChatError] = useState('')
 
   const loadCompanyProfile = async () => {
     if (!session) {
@@ -305,6 +341,57 @@ function App() {
     setAdminCargos((data ?? []) as CompanyCargo[])
   }
 
+  const loadChatThreads = async () => {
+    if (!session) {
+      setChatThreads([])
+      setActiveChatId(null)
+      return
+    }
+
+    setIsLoadingChats(true)
+    setChatError('')
+
+    const { data, error } = await supabase.rpc('empresa_listar_conversas_chat_web')
+
+    setIsLoadingChats(false)
+
+    if (error) {
+      setChatError(error.message)
+      return
+    }
+
+    const threads = (data ?? []) as ChatThread[]
+    setChatThreads(threads)
+    setActiveChatId((current) =>
+      threads.some((thread) => thread.candidatura_id === current)
+        ? current
+        : threads[0]?.candidatura_id ?? null,
+    )
+  }
+
+  const loadChatMessages = async (candidaturaId: string | null) => {
+    if (!session || !candidaturaId) {
+      setChatMessages([])
+      return
+    }
+
+    setIsLoadingChatMessages(true)
+    setChatError('')
+
+    const { data, error } = await supabase.rpc('listar_mensagens_chat_web', {
+      p_candidatura_id: candidaturaId,
+    })
+
+    setIsLoadingChatMessages(false)
+
+    if (error) {
+      setChatError(error.message)
+      return
+    }
+
+    setChatMessages((data ?? []) as ChatMessage[])
+  }
+
   useEffect(() => {
     let isMounted = true
 
@@ -368,6 +455,15 @@ function App() {
 
     void loadAdminCargos()
   }, [isAdmin])
+
+  useEffect(() => {
+    if (activeSection !== 'chat') return
+    void loadChatThreads()
+  }, [activeSection, session])
+
+  useEffect(() => {
+    void loadChatMessages(activeChatId)
+  }, [activeChatId, session])
 
   const handleFieldChange =
     (field: keyof FormState) =>
@@ -445,7 +541,47 @@ function App() {
     setAuthMessage('')
     setAuthError('')
     setAdminFilters(initialAdminFilters)
+    setChatThreads([])
+    setChatMessages([])
+    setActiveChatId(null)
     await supabase.auth.signOut()
+  }
+
+  const saveCompanyProfile = async () => {
+    setIsSavingProfile(true)
+    setProfileMessage('')
+    setProfileError('')
+
+    const isCompanyProfileComplete =
+      companyProfile.companyName.trim() &&
+      companyProfile.cnpj.trim() &&
+      companyProfile.contactName.trim() &&
+      companyProfile.phone.trim()
+
+    if (!isCompanyProfileComplete) {
+      setIsSavingProfile(false)
+      setProfileError('Preencha nome, CNPJ, responsavel e telefone para salvar o perfil.')
+      return false
+    }
+
+    const { error } = await supabase.rpc('salvar_empresa_web', {
+      p_nome: companyProfile.companyName.trim(),
+      p_cnpj: companyProfile.cnpj.trim(),
+      p_responsavel: companyProfile.contactName.trim(),
+      p_telefone: companyProfile.phone.trim(),
+      p_email: companyProfile.email.trim() || null,
+    })
+
+    setIsSavingProfile(false)
+
+    if (error) {
+      setProfileError(error.message)
+      return false
+    }
+
+    setProfileMessage('Perfil da empresa salvo com sucesso.')
+    await loadCompanyProfile()
+    return true
   }
 
   const submitCargo = async (mode: SubmitMode) => {
@@ -543,8 +679,46 @@ function App() {
     await loadAdminCargos()
   }
 
+  const handleProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    await saveCompanyProfile()
+  }
+
+  const handleProfileSaveAndAddCargo = async () => {
+    const saved = await saveCompanyProfile()
+    if (saved) {
+      setActiveSection('nova-carga')
+    }
+  }
+
+  const handleChatSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!activeChatId || !chatDraft.trim()) return
+
+    setIsSendingChatMessage(true)
+    setChatError('')
+
+    const { error } = await supabase.rpc('enviar_mensagem_chat_web', {
+      p_candidatura_id: activeChatId,
+      p_mensagem: chatDraft.trim(),
+    })
+
+    setIsSendingChatMessage(false)
+
+    if (error) {
+      setChatError(error.message)
+      return
+    }
+
+    setChatDraft('')
+    await loadChatMessages(activeChatId)
+    await loadChatThreads()
+  }
+
   const authFeedbackClass = authError ? 'form-feedback form-feedback--error' : 'form-feedback'
   const submitFeedbackClass = submitError ? 'form-feedback form-feedback--error' : 'form-feedback'
+  const profileFeedbackClass = profileError ? 'form-feedback form-feedback--error' : 'form-feedback'
+  const activeChatThread = chatThreads.find((thread) => thread.candidatura_id === activeChatId)
 
   if (isLoadingSession) {
     return (
@@ -1114,50 +1288,96 @@ function App() {
             <aside className="chat-list" aria-label="Conversas">
               <div className="chat-list__header">
                 <span>Conversas</span>
-                <strong>Atendimento</strong>
+                <strong>{isLoadingChats ? 'Carregando...' : `${chatThreads.length} em atendimento`}</strong>
               </div>
-              <button className="chat-thread chat-thread--active" type="button">
-                <span className="chat-thread__avatar">FM</span>
-                <span>
-                  <strong>Frete em análise</strong>
-                  <small>Aguardando dados da carga</small>
-                </span>
-              </button>
-              <button className="chat-thread" type="button">
-                <span className="chat-thread__avatar">OP</span>
-                <span>
-                  <strong>Operação</strong>
-                  <small>Nenhuma nova mensagem</small>
-                </span>
-              </button>
+              {chatThreads.map((thread) => (
+                <button
+                  className={
+                    activeChatId === thread.candidatura_id
+                      ? 'chat-thread chat-thread--active'
+                      : 'chat-thread'
+                  }
+                  key={thread.candidatura_id}
+                  type="button"
+                  onClick={() => setActiveChatId(thread.candidatura_id)}
+                >
+                  <span className="chat-thread__avatar">
+                    {(thread.motorista_nome || 'MO').slice(0, 2).toUpperCase()}
+                  </span>
+                  <span>
+                    <strong>{thread.motorista_nome || 'Motorista sem nome'}</strong>
+                    <small>{thread.carga_produto} | {thread.carga_origem} {'->'} {thread.carga_destino}</small>
+                  </span>
+                </button>
+              ))}
+              {!isLoadingChats && chatThreads.length === 0 && (
+                <div className="locked-form">
+                  <strong>Nenhuma conversa aberta</strong>
+                  <p>Quando um motorista aceitar uma carga, a conversa aparecera aqui.</p>
+                </div>
+              )}
             </aside>
 
             <section className="chat-window" aria-label="Janela da conversa">
               <div className="chat-window__top">
                 <div>
                   <span>Canal de negociação</span>
-                  <strong>Frete em análise</strong>
+                  <strong>
+                    {activeChatThread
+                      ? `${activeChatThread.carga_produto} com ${activeChatThread.motorista_nome || 'motorista'}`
+                      : 'Selecione uma conversa'}
+                  </strong>
                 </div>
-                <span className="status-badge status-badge--rascunho">Em aberto</span>
+                {activeChatThread && (
+                  <span className="status-badge status-badge--rascunho">{activeChatThread.status}</span>
+                )}
               </div>
 
               <div className="chat-messages">
-                <div className="chat-message">
-                  <span>GLM Cargas</span>
-                  <p>Quando um motorista demonstrar interesse, a conversa aparecerá aqui.</p>
-                </div>
-                <div className="chat-message chat-message--muted">
-                  <span>Sistema</span>
-                  <p>Use este espaço para acompanhar dúvidas sobre rota, prazo e compatibilidade.</p>
-                </div>
+                {chatError && <div className="form-feedback form-feedback--error">{chatError}</div>}
+                {isLoadingChatMessages ? (
+                  <div className="chat-message">
+                    <span>GLM Cargas</span>
+                    <p>Carregando mensagens da conversa.</p>
+                  </div>
+                ) : chatMessages.length === 0 ? (
+                  <div className="chat-message">
+                    <span>GLM Cargas</span>
+                    <p>Envie a primeira mensagem para alinhar rota, prazo e compatibilidade.</p>
+                  </div>
+                ) : (
+                  chatMessages.map((message) => (
+                    <div
+                      className={
+                        message.sender_role === 'empresa'
+                          ? 'chat-message chat-message--muted'
+                          : 'chat-message'
+                      }
+                      key={message.id}
+                    >
+                      <span>{message.sender_role === 'empresa' ? 'Empresa' : 'Motorista'}</span>
+                      <p>{message.mensagem}</p>
+                    </div>
+                  ))
+                )}
               </div>
 
-              <div className="chat-compose">
-                <input type="text" placeholder="Digite uma mensagem..." disabled />
-                <button className="button button--primary" type="button" disabled>
-                  Enviar
+              <form className="chat-compose" onSubmit={handleChatSubmit}>
+                <input
+                  type="text"
+                  placeholder="Digite uma mensagem..."
+                  disabled={!activeChatId || isSendingChatMessage}
+                  value={chatDraft}
+                  onChange={(event) => setChatDraft(event.target.value)}
+                />
+                <button
+                  className="button button--primary"
+                  type="submit"
+                  disabled={!activeChatId || !chatDraft.trim() || isSendingChatMessage}
+                >
+                  {isSendingChatMessage ? 'Enviando...' : 'Enviar'}
                 </button>
-              </div>
+              </form>
             </section>
           </div>
         </section>
@@ -1192,7 +1412,7 @@ function App() {
             </div>
           </div>
 
-          <form className="cargo-form profile-form">
+          <form className="cargo-form profile-form" onSubmit={handleProfileSubmit}>
             <div className="form-block">
               <h3>Dados da empresa</h3>
               <div className="field-grid field-grid--two">
@@ -1248,9 +1468,21 @@ function App() {
               </div>
             </div>
 
+            {(profileMessage || profileError) && (
+              <div className={profileFeedbackClass}>{profileError || profileMessage}</div>
+            )}
+
             <div className="form-actions">
-              <button className="button button--primary" type="button" onClick={() => setActiveSection('nova-carga')}>
-                Usar dados e adicionar carga
+              <button className="button button--primary" type="submit" disabled={isSavingProfile}>
+                {isSavingProfile ? 'Salvando...' : 'Salvar perfil'}
+              </button>
+              <button
+                className="button button--ghost"
+                type="button"
+                disabled={isSavingProfile}
+                onClick={handleProfileSaveAndAddCargo}
+              >
+                {isSavingProfile ? 'Salvando...' : 'Salvar e adicionar carga'}
               </button>
             </div>
           </form>
