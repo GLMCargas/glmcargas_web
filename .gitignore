@@ -3,7 +3,7 @@ dist/
 .firebase/
 supabase/.temp/
 *.tsbuildinfo
-.env.local
-.env.*.local
+.env*
+!.env.example
 vite.config.js
 vite.config.d.ts
