@@ -30,7 +30,13 @@ jobs:
         run: npm ci
 
       - name: Build app
-        run: npx vite build --mode development
+        run: |
+          test -n "$VITE_SUPABASE_URL"
+          test -n "$VITE_SUPABASE_PUBLISHABLE_KEY"
+          npx vite build --mode development
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_DEV_URL || secrets.VITE_SUPABASE_DEV_URL || vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL || vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_DEV_PUBLISHABLE_KEY || vars.VITE_SUPABASE_DEV_PUBLISHABLE_KEY || secrets.VITE_SUPABASE_DEV_ANON_KEY || vars.VITE_SUPABASE_DEV_ANON_KEY || secrets.VITE_SUPABASE_PUBLISHABLE_KEY || vars.VITE_SUPABASE_PUBLISHABLE_KEY || secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
 
       - name: Deploy dev channel
         uses: FirebaseExtended/action-hosting-deploy@v0
