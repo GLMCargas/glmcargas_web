@@ -120,7 +120,7 @@ type AdminFilters = typeof initialAdminFilters;
 type TripRequestStatus = 'Aguardando' | 'Aceita' | 'Recusada';
 
 type CompanyCargo = {
-  id: string;
+  id: number;
   status: CargoStatus;
   empresa_nome: string;
   cidade_coleta: string;
@@ -548,8 +548,8 @@ function App() {
   const [companyCargos, setCompanyCargos] = useState<CompanyCargo[]>([]);
   const [isLoadingCargos, setIsLoadingCargos] = useState(false);
   const [cargoListError, setCargoListError] = useState('');
-  const [actionCargoId, setActionCargoId] = useState<string | null>(null);
-  const [editingCargoId, setEditingCargoId] = useState<string | null>(null);
+  const [actionCargoId, setActionCargoId] = useState<number | null>(null);
+  const [editingCargoId, setEditingCargoId] = useState<number | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminFilters, setAdminFilters] =
     useState<AdminFilters>(initialAdminFilters);
@@ -1409,7 +1409,7 @@ function App() {
   };
 
   const handleCargoStatusChange = async (
-    cargoId: string,
+    cargoId: number,
     nextStatus: CargoStatus,
   ) => {
     const targetCargo = companyCargos.find((cargo) => cargo.id === cargoId);
