@@ -46,6 +46,25 @@ create table if not exists public.cargas_web (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.candidaturas_web (
+  id uuid primary key default gen_random_uuid(),
+  carga_id uuid not null references public.cargas_web(id) on delete cascade,
+  motorista_auth_user_id uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'aceita' check (status in ('aceita', 'contatado', 'recusado', 'aprovado', 'cancelada')),
+  mensagem text,
+  motorista_nome text,
+  motorista_telefone text,
+  motorista_email text,
+  motorista_cidade_base text,
+  motorista_uf_base char(2),
+  motorista_tipo_veiculo text,
+  motorista_tipo_carroceria text,
+  motorista_rntrc_antt text,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now()),
+  unique (carga_id, motorista_auth_user_id)
+);
+
 create table if not exists public.web_admin_users (
   id uuid primary key default gen_random_uuid(),
   auth_user_id uuid unique references auth.users(id) on delete cascade,
@@ -53,9 +72,23 @@ create table if not exists public.web_admin_users (
   created_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.chat_messages_web (
+  id uuid primary key default gen_random_uuid(),
+  candidatura_id uuid not null references public.candidaturas_web(id) on delete cascade,
+  sender_auth_user_id uuid not null references auth.users(id) on delete cascade,
+  sender_role text not null check (sender_role in ('empresa', 'motorista')),
+  mensagem text not null,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
 create index if not exists cargas_web_empresa_id_idx on public.cargas_web (empresa_id);
 create index if not exists cargas_web_status_idx on public.cargas_web (status);
 create index if not exists cargas_web_origem_idx on public.cargas_web (uf_coleta, cidade_coleta);
+create index if not exists candidaturas_web_carga_id_idx on public.candidaturas_web (carga_id);
+create index if not exists candidaturas_web_motorista_auth_user_id_idx on public.candidaturas_web (motorista_auth_user_id);
+create index if not exists candidaturas_web_status_idx on public.candidaturas_web (status);
+create index if not exists chat_messages_web_candidatura_id_created_at_idx on public.chat_messages_web (candidatura_id, created_at);
+create index if not exists chat_messages_web_sender_auth_user_id_idx on public.chat_messages_web (sender_auth_user_id);
 
 drop trigger if exists empresas_web_set_updated_at on public.empresas_web;
 create trigger empresas_web_set_updated_at
@@ -69,8 +102,17 @@ before update on public.cargas_web
 for each row
 execute function public.set_current_timestamp_updated_at();
 
+drop trigger if exists candidaturas_web_set_updated_at on public.candidaturas_web;
+create trigger candidaturas_web_set_updated_at
+before update on public.candidaturas_web
+for each row
+execute function public.set_current_timestamp_updated_at();
+
 alter table public.empresas_web enable row level security;
 alter table public.cargas_web enable row level security;
+alter table public.candidaturas_web enable row level security;
+alter table public.web_admin_users enable row level security;
+alter table public.chat_messages_web enable row level security;
 
 drop policy if exists "service_role_manage_empresas_web" on public.empresas_web;
 create policy "service_role_manage_empresas_web"
@@ -88,11 +130,25 @@ to service_role
 using (true)
 with check (true);
 
-alter table public.web_admin_users enable row level security;
+drop policy if exists "service_role_manage_candidaturas_web" on public.candidaturas_web;
+create policy "service_role_manage_candidaturas_web"
+on public.candidaturas_web
+for all
+to service_role
+using (true)
+with check (true);
 
 drop policy if exists "service_role_manage_web_admin_users" on public.web_admin_users;
 create policy "service_role_manage_web_admin_users"
 on public.web_admin_users
+for all
+to service_role
+using (true)
+with check (true);
+
+drop policy if exists "service_role_manage_chat_messages_web" on public.chat_messages_web;
+create policy "service_role_manage_chat_messages_web"
+on public.chat_messages_web
 for all
 to service_role
 using (true)
@@ -118,6 +174,159 @@ using (
       and ew.auth_user_id = auth.uid()
   )
 );
+
+drop policy if exists "authenticated_select_own_candidaturas_motorista_web" on public.candidaturas_web;
+create policy "authenticated_select_own_candidaturas_motorista_web"
+on public.candidaturas_web
+for select
+to authenticated
+using (auth.uid() = motorista_auth_user_id);
+
+drop policy if exists "authenticated_select_own_candidaturas_empresa_web" on public.candidaturas_web;
+create policy "authenticated_select_own_candidaturas_empresa_web"
+on public.candidaturas_web
+for select
+to authenticated
+using (
+  exists (
+    select 1
+    from public.cargas_web c
+    join public.empresas_web e on e.id = c.empresa_id
+    where c.id = candidaturas_web.carga_id
+      and e.auth_user_id = auth.uid()
+  )
+);
+
+drop policy if exists "authenticated_select_own_chat_messages_web" on public.chat_messages_web;
+create policy "authenticated_select_own_chat_messages_web"
+on public.chat_messages_web
+for select
+to authenticated
+using (
+  exists (
+    select 1
+    from public.candidaturas_web cd
+    join public.cargas_web c on c.id = cd.carga_id
+    join public.empresas_web e on e.id = c.empresa_id
+    where cd.id = chat_messages_web.candidatura_id
+      and (
+        cd.motorista_auth_user_id = auth.uid()
+        or e.auth_user_id = auth.uid()
+      )
+  )
+);
+
+create or replace function public.salvar_empresa_web(
+  p_nome text,
+  p_cnpj text,
+  p_responsavel text,
+  p_telefone text,
+  p_email text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_auth_user_id uuid;
+  v_nome text;
+  v_cnpj text;
+  v_responsavel text;
+  v_telefone text;
+  v_email text;
+  v_empresa_id uuid;
+begin
+  v_auth_user_id := auth.uid();
+  v_nome := trim(coalesce(p_nome, ''));
+  v_cnpj := trim(coalesce(p_cnpj, ''));
+  v_responsavel := trim(coalesce(p_responsavel, ''));
+  v_telefone := trim(coalesce(p_telefone, ''));
+  v_email := nullif(trim(coalesce(p_email, '')), '');
+
+  if v_auth_user_id is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if v_nome = '' or v_cnpj = '' or v_responsavel = '' or v_telefone = '' then
+    raise exception 'Dados da empresa incompletos.';
+  end if;
+
+  select ew.id
+  into v_empresa_id
+  from public.empresas_web ew
+  where ew.auth_user_id = v_auth_user_id
+  limit 1;
+
+  if v_empresa_id is not null then
+    if exists (
+      select 1
+      from public.empresas_web ew
+      where ew.cnpj = v_cnpj
+        and ew.id <> v_empresa_id
+    ) then
+      raise exception 'Ja existe outra empresa com este CNPJ.';
+    end if;
+
+    update public.empresas_web
+    set
+      nome = v_nome,
+      cnpj = v_cnpj,
+      responsavel = v_responsavel,
+      telefone = v_telefone,
+      email = v_email,
+      updated_at = timezone('utc', now())
+    where id = v_empresa_id
+    returning id into v_empresa_id;
+
+    return v_empresa_id;
+  end if;
+
+  update public.empresas_web
+  set
+    auth_user_id = v_auth_user_id,
+    nome = v_nome,
+    responsavel = v_responsavel,
+    telefone = v_telefone,
+    email = v_email,
+    updated_at = timezone('utc', now())
+  where cnpj = v_cnpj
+    and (auth_user_id is null or auth_user_id = v_auth_user_id)
+  returning id into v_empresa_id;
+
+  if v_empresa_id is not null then
+    return v_empresa_id;
+  end if;
+
+  begin
+    insert into public.empresas_web (
+      auth_user_id,
+      nome,
+      cnpj,
+      responsavel,
+      telefone,
+      email
+    )
+    values (
+      v_auth_user_id,
+      v_nome,
+      v_cnpj,
+      v_responsavel,
+      v_telefone,
+      v_email
+    )
+    returning id into v_empresa_id;
+  exception
+    when unique_violation then
+      raise exception 'Empresa ja vinculada a outro usuario autenticado.';
+  end;
+
+  return v_empresa_id;
+end;
+$$;
+
+revoke all on function public.salvar_empresa_web(text, text, text, text, text) from public;
+grant execute on function public.salvar_empresa_web(text, text, text, text, text) to authenticated, service_role;
 
 create or replace function public.publicar_carga_web(
   p_status text,
@@ -149,46 +358,32 @@ security definer
 set search_path = public
 as $$
 declare
-  v_auth_user_id uuid;
   v_empresa_id uuid;
   v_carga_id uuid;
 begin
-  v_auth_user_id := auth.uid();
-
-  if v_auth_user_id is null then
+  if auth.uid() is null then
     raise exception 'Usuario nao autenticado.';
   end if;
 
-  insert into public.empresas_web (
-    auth_user_id,
-    nome,
-    cnpj,
-    responsavel,
-    telefone,
-    email
-  )
-  values (
-    v_auth_user_id,
-    trim(p_empresa_nome),
-    trim(p_empresa_cnpj),
-    trim(p_empresa_responsavel),
-    trim(p_empresa_telefone),
-    nullif(trim(coalesce(p_empresa_email, '')), '')
-  )
-  on conflict (cnpj)
-  do update set
-    nome = excluded.nome,
-    responsavel = excluded.responsavel,
-    telefone = excluded.telefone,
-    email = excluded.email,
-    updated_at = timezone('utc', now())
-  where public.empresas_web.auth_user_id is null
-    or public.empresas_web.auth_user_id = v_auth_user_id
-  returning id into v_empresa_id;
-
-  if v_empresa_id is null then
-    raise exception 'Empresa ja vinculada a outro usuario autenticado.';
+  if trim(coalesce(p_cidade_coleta, '')) = ''
+    or trim(coalesce(p_uf_coleta, '')) = ''
+    or trim(coalesce(p_cidade_entrega, '')) = ''
+    or trim(coalesce(p_uf_entrega, '')) = ''
+    or trim(coalesce(p_produto, '')) = ''
+    or trim(coalesce(p_peso_total, '')) = ''
+    or trim(coalesce(p_tipo_veiculo, '')) = ''
+    or trim(coalesce(p_tipo_carroceria, '')) = ''
+    or trim(coalesce(p_categoria_carga, '')) = '' then
+    raise exception 'Dados principais da carga incompletos.';
   end if;
+
+  v_empresa_id := public.salvar_empresa_web(
+    p_empresa_nome,
+    p_empresa_cnpj,
+    p_empresa_responsavel,
+    p_empresa_telefone,
+    p_empresa_email
+  );
 
   insert into public.cargas_web (
     empresa_id,
@@ -245,7 +440,7 @@ revoke all on function public.publicar_carga_web(
 
 grant execute on function public.publicar_carga_web(
   text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
-) to anon, authenticated, service_role;
+) to authenticated, service_role;
 
 create or replace function public.atualizar_carga_web(
   p_carga_id uuid,
@@ -470,6 +665,673 @@ $$;
 
 revoke all on function public.atualizar_status_carga_web(uuid, text) from public;
 grant execute on function public.atualizar_status_carga_web(uuid, text) to authenticated, service_role;
+
+create or replace function public.listar_cargas_disponiveis_web(
+  p_busca text default null,
+  p_uf_coleta text default null,
+  p_tipo_veiculo text default null,
+  p_tipo_carroceria text default null
+)
+returns table (
+  id uuid,
+  empresa_nome text,
+  cidade_coleta text,
+  uf_coleta char(2),
+  data_coleta date,
+  cidade_entrega text,
+  uf_entrega char(2),
+  prazo_entrega date,
+  produto text,
+  peso_total text,
+  valor_frete numeric,
+  valor_frete_texto text,
+  tipo_veiculo text,
+  tipo_carroceria text,
+  categoria_carga text,
+  janela_carregamento text,
+  exigencias_motorista text,
+  observacoes text,
+  meu_status_aceite text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  return query
+  select
+    c.id,
+    e.nome as empresa_nome,
+    c.cidade_coleta,
+    c.uf_coleta,
+    c.data_coleta,
+    c.cidade_entrega,
+    c.uf_entrega,
+    c.prazo_entrega,
+    c.produto,
+    c.peso_total,
+    c.valor_frete,
+    c.valor_frete_texto,
+    c.tipo_veiculo,
+    c.tipo_carroceria,
+    c.categoria_carga,
+    c.janela_carregamento,
+    c.exigencias_motorista,
+    c.observacoes,
+    cd.status as meu_status_aceite,
+    c.created_at,
+    c.updated_at
+  from public.cargas_web c
+  join public.empresas_web e on e.id = c.empresa_id
+  left join public.candidaturas_web cd
+    on cd.carga_id = c.id
+   and cd.motorista_auth_user_id = auth.uid()
+  where c.status = 'publicada'
+    and (
+      p_busca is null
+      or p_busca = ''
+      or e.nome ilike '%' || p_busca || '%'
+      or c.produto ilike '%' || p_busca || '%'
+      or c.cidade_coleta ilike '%' || p_busca || '%'
+      or c.cidade_entrega ilike '%' || p_busca || '%'
+      or c.uf_coleta ilike '%' || p_busca || '%'
+      or c.uf_entrega ilike '%' || p_busca || '%'
+      or c.tipo_veiculo ilike '%' || p_busca || '%'
+      or c.tipo_carroceria ilike '%' || p_busca || '%'
+      or c.categoria_carga ilike '%' || p_busca || '%'
+    )
+    and (p_uf_coleta is null or p_uf_coleta = '' or c.uf_coleta = upper(trim(p_uf_coleta)))
+    and (
+      p_tipo_veiculo is null
+      or p_tipo_veiculo = ''
+      or lower(c.tipo_veiculo) = lower(trim(p_tipo_veiculo))
+    )
+    and (
+      p_tipo_carroceria is null
+      or p_tipo_carroceria = ''
+      or lower(c.tipo_carroceria) = lower(trim(p_tipo_carroceria))
+    )
+  order by c.created_at desc;
+end;
+$$;
+
+revoke all on function public.listar_cargas_disponiveis_web(text, text, text, text) from public;
+grant execute on function public.listar_cargas_disponiveis_web(text, text, text, text) to authenticated, service_role;
+
+create or replace function public.aceitar_carga_web(
+  p_carga_id uuid,
+  p_mensagem text default null,
+  p_motorista_nome text default null,
+  p_motorista_telefone text default null,
+  p_motorista_email text default null,
+  p_motorista_cidade_base text default null,
+  p_motorista_uf_base text default null,
+  p_motorista_tipo_veiculo text default null,
+  p_motorista_tipo_carroceria text default null,
+  p_motorista_rntrc_antt text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_candidatura_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.cargas_web c
+    where c.id = p_carga_id
+      and c.status = 'publicada'
+  ) then
+    raise exception 'Carga indisponivel para aceite.';
+  end if;
+
+  insert into public.candidaturas_web (
+    carga_id,
+    motorista_auth_user_id,
+    status,
+    mensagem,
+    motorista_nome,
+    motorista_telefone,
+    motorista_email,
+    motorista_cidade_base,
+    motorista_uf_base,
+    motorista_tipo_veiculo,
+    motorista_tipo_carroceria,
+    motorista_rntrc_antt
+  )
+  values (
+    p_carga_id,
+    auth.uid(),
+    'aceita',
+    nullif(trim(coalesce(p_mensagem, '')), ''),
+    nullif(trim(coalesce(p_motorista_nome, '')), ''),
+    nullif(trim(coalesce(p_motorista_telefone, '')), ''),
+    nullif(trim(coalesce(p_motorista_email, '')), ''),
+    nullif(trim(coalesce(p_motorista_cidade_base, '')), ''),
+    nullif(upper(trim(coalesce(p_motorista_uf_base, ''))), ''),
+    nullif(trim(coalesce(p_motorista_tipo_veiculo, '')), ''),
+    nullif(trim(coalesce(p_motorista_tipo_carroceria, '')), ''),
+    nullif(trim(coalesce(p_motorista_rntrc_antt, '')), '')
+  )
+  on conflict (carga_id, motorista_auth_user_id)
+  do update set
+    mensagem = excluded.mensagem,
+    motorista_nome = excluded.motorista_nome,
+    motorista_telefone = excluded.motorista_telefone,
+    motorista_email = excluded.motorista_email,
+    motorista_cidade_base = excluded.motorista_cidade_base,
+    motorista_uf_base = excluded.motorista_uf_base,
+    motorista_tipo_veiculo = excluded.motorista_tipo_veiculo,
+    motorista_tipo_carroceria = excluded.motorista_tipo_carroceria,
+    motorista_rntrc_antt = excluded.motorista_rntrc_antt,
+    status = case
+      when public.candidaturas_web.status = 'cancelada' then 'aceita'
+      else public.candidaturas_web.status
+    end,
+    updated_at = timezone('utc', now())
+  returning id into v_candidatura_id;
+
+  return v_candidatura_id;
+end;
+$$;
+
+revoke all on function public.aceitar_carga_web(uuid, text, text, text, text, text, text, text, text, text) from public;
+grant execute on function public.aceitar_carga_web(uuid, text, text, text, text, text, text, text, text, text) to authenticated, service_role;
+
+create or replace function public.demonstrar_interesse_carga_web(
+  p_carga_id uuid,
+  p_mensagem text default null
+)
+returns uuid
+language sql
+security definer
+set search_path = public
+as $$
+  select public.aceitar_carga_web(p_carga_id, p_mensagem, null, null, null, null, null, null, null, null);
+$$;
+
+revoke all on function public.demonstrar_interesse_carga_web(uuid, text) from public;
+grant execute on function public.demonstrar_interesse_carga_web(uuid, text) to authenticated, service_role;
+
+create or replace function public.minhas_cargas_aceitas_web()
+returns table (
+  candidatura_id uuid,
+  status text,
+  mensagem text,
+  carga_id uuid,
+  empresa_nome text,
+  cidade_coleta text,
+  uf_coleta char(2),
+  data_coleta date,
+  cidade_entrega text,
+  uf_entrega char(2),
+  prazo_entrega date,
+  produto text,
+  peso_total text,
+  valor_frete numeric,
+  valor_frete_texto text,
+  tipo_veiculo text,
+  tipo_carroceria text,
+  categoria_carga text,
+  janela_carregamento text,
+  exigencias_motorista text,
+  observacoes text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  return query
+  select
+    cd.id as candidatura_id,
+    cd.status,
+    cd.mensagem,
+    c.id as carga_id,
+    e.nome as empresa_nome,
+    c.cidade_coleta,
+    c.uf_coleta,
+    c.data_coleta,
+    c.cidade_entrega,
+    c.uf_entrega,
+    c.prazo_entrega,
+    c.produto,
+    c.peso_total,
+    c.valor_frete,
+    c.valor_frete_texto,
+    c.tipo_veiculo,
+    c.tipo_carroceria,
+    c.categoria_carga,
+    c.janela_carregamento,
+    c.exigencias_motorista,
+    c.observacoes,
+    cd.created_at,
+    cd.updated_at
+  from public.candidaturas_web cd
+  join public.cargas_web c on c.id = cd.carga_id
+  join public.empresas_web e on e.id = c.empresa_id
+  where cd.motorista_auth_user_id = auth.uid()
+  order by cd.created_at desc;
+end;
+$$;
+
+revoke all on function public.minhas_cargas_aceitas_web() from public;
+grant execute on function public.minhas_cargas_aceitas_web() to authenticated, service_role;
+
+create or replace function public.minhas_candidaturas_web()
+returns table (
+  candidatura_id uuid,
+  status text,
+  mensagem text,
+  carga_id uuid,
+  empresa_nome text,
+  cidade_coleta text,
+  uf_coleta char(2),
+  data_coleta date,
+  cidade_entrega text,
+  uf_entrega char(2),
+  prazo_entrega date,
+  produto text,
+  peso_total text,
+  valor_frete numeric,
+  valor_frete_texto text,
+  tipo_veiculo text,
+  tipo_carroceria text,
+  categoria_carga text,
+  janela_carregamento text,
+  exigencias_motorista text,
+  observacoes text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select * from public.minhas_cargas_aceitas_web();
+$$;
+
+revoke all on function public.minhas_candidaturas_web() from public;
+grant execute on function public.minhas_candidaturas_web() to authenticated, service_role;
+
+create or replace function public.empresa_listar_aceites_carga_web(
+  p_carga_id uuid default null,
+  p_status text default null
+)
+returns table (
+  candidatura_id uuid,
+  status text,
+  mensagem text,
+  carga_id uuid,
+  carga_produto text,
+  carga_origem text,
+  carga_destino text,
+  motorista_auth_user_id uuid,
+  motorista_nome text,
+  motorista_telefone text,
+  motorista_email text,
+  motorista_cidade_base text,
+  motorista_uf_base char(2),
+  motorista_tipo_veiculo text,
+  motorista_tipo_carroceria text,
+  motorista_rntrc_antt text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  return query
+  select
+    cd.id as candidatura_id,
+    cd.status,
+    cd.mensagem,
+    c.id as carga_id,
+    c.produto as carga_produto,
+    c.cidade_coleta || '/' || c.uf_coleta as carga_origem,
+    c.cidade_entrega || '/' || c.uf_entrega as carga_destino,
+    cd.motorista_auth_user_id,
+    cd.motorista_nome,
+    cd.motorista_telefone,
+    cd.motorista_email,
+    cd.motorista_cidade_base,
+    cd.motorista_uf_base,
+    cd.motorista_tipo_veiculo,
+    cd.motorista_tipo_carroceria,
+    cd.motorista_rntrc_antt,
+    cd.created_at,
+    cd.updated_at
+  from public.candidaturas_web cd
+  join public.cargas_web c on c.id = cd.carga_id
+  join public.empresas_web e on e.id = c.empresa_id
+  where e.auth_user_id = auth.uid()
+    and (p_carga_id is null or c.id = p_carga_id)
+    and (p_status is null or p_status = '' or cd.status = p_status)
+  order by cd.created_at desc;
+end;
+$$;
+
+revoke all on function public.empresa_listar_aceites_carga_web(uuid, text) from public;
+grant execute on function public.empresa_listar_aceites_carga_web(uuid, text) to authenticated, service_role;
+
+create or replace function public.empresa_listar_candidaturas_web(
+  p_carga_id uuid default null,
+  p_status text default null
+)
+returns table (
+  candidatura_id uuid,
+  status text,
+  mensagem text,
+  carga_id uuid,
+  carga_produto text,
+  carga_origem text,
+  carga_destino text,
+  motorista_auth_user_id uuid,
+  motorista_nome text,
+  motorista_telefone text,
+  motorista_email text,
+  motorista_cidade_base text,
+  motorista_uf_base char(2),
+  motorista_tipo_veiculo text,
+  motorista_tipo_carroceria text,
+  motorista_rntrc_antt text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select * from public.empresa_listar_aceites_carga_web(p_carga_id, p_status);
+$$;
+
+revoke all on function public.empresa_listar_candidaturas_web(uuid, text) from public;
+grant execute on function public.empresa_listar_candidaturas_web(uuid, text) to authenticated, service_role;
+
+create or replace function public.atualizar_status_candidatura_web(
+  p_candidatura_id uuid,
+  p_status text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_candidatura_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if p_status not in ('aceita', 'contatado', 'recusado', 'aprovado', 'cancelada') then
+    raise exception 'Status invalido.';
+  end if;
+
+  update public.candidaturas_web cd
+  set
+    status = p_status,
+    updated_at = timezone('utc', now())
+  from public.cargas_web c
+  join public.empresas_web e on e.id = c.empresa_id
+  where cd.id = p_candidatura_id
+    and c.id = cd.carga_id
+    and e.auth_user_id = auth.uid()
+  returning cd.id into v_candidatura_id;
+
+  if v_candidatura_id is null then
+    raise exception 'Candidatura nao encontrada para a conta autenticada.';
+  end if;
+
+  return v_candidatura_id;
+end;
+$$;
+
+revoke all on function public.atualizar_status_candidatura_web(uuid, text) from public;
+grant execute on function public.atualizar_status_candidatura_web(uuid, text) to authenticated, service_role;
+
+create or replace function public.empresa_listar_conversas_chat_web()
+returns table (
+  candidatura_id uuid,
+  status text,
+  carga_id uuid,
+  carga_produto text,
+  carga_origem text,
+  carga_destino text,
+  motorista_auth_user_id uuid,
+  motorista_nome text,
+  motorista_telefone text,
+  motorista_email text,
+  ultima_mensagem text,
+  ultima_mensagem_em timestamptz,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  return query
+  select
+    cd.id as candidatura_id,
+    cd.status,
+    c.id as carga_id,
+    c.produto as carga_produto,
+    c.cidade_coleta || '/' || c.uf_coleta as carga_origem,
+    c.cidade_entrega || '/' || c.uf_entrega as carga_destino,
+    cd.motorista_auth_user_id,
+    cd.motorista_nome,
+    cd.motorista_telefone,
+    cd.motorista_email,
+    last_message.mensagem as ultima_mensagem,
+    last_message.created_at as ultima_mensagem_em,
+    cd.created_at
+  from public.candidaturas_web cd
+  join public.cargas_web c on c.id = cd.carga_id
+  join public.empresas_web e on e.id = c.empresa_id
+  left join lateral (
+    select cm.mensagem, cm.created_at
+    from public.chat_messages_web cm
+    where cm.candidatura_id = cd.id
+    order by cm.created_at desc
+    limit 1
+  ) last_message on true
+  where e.auth_user_id = auth.uid()
+  order by coalesce(last_message.created_at, cd.created_at) desc;
+end;
+$$;
+
+revoke all on function public.empresa_listar_conversas_chat_web() from public;
+grant execute on function public.empresa_listar_conversas_chat_web() to authenticated, service_role;
+
+create or replace function public.motorista_listar_conversas_chat_web()
+returns table (
+  candidatura_id uuid,
+  status text,
+  carga_id uuid,
+  empresa_nome text,
+  carga_produto text,
+  carga_origem text,
+  carga_destino text,
+  ultima_mensagem text,
+  ultima_mensagem_em timestamptz,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  return query
+  select
+    cd.id as candidatura_id,
+    cd.status,
+    c.id as carga_id,
+    e.nome as empresa_nome,
+    c.produto as carga_produto,
+    c.cidade_coleta || '/' || c.uf_coleta as carga_origem,
+    c.cidade_entrega || '/' || c.uf_entrega as carga_destino,
+    last_message.mensagem as ultima_mensagem,
+    last_message.created_at as ultima_mensagem_em,
+    cd.created_at
+  from public.candidaturas_web cd
+  join public.cargas_web c on c.id = cd.carga_id
+  join public.empresas_web e on e.id = c.empresa_id
+  left join lateral (
+    select cm.mensagem, cm.created_at
+    from public.chat_messages_web cm
+    where cm.candidatura_id = cd.id
+    order by cm.created_at desc
+    limit 1
+  ) last_message on true
+  where cd.motorista_auth_user_id = auth.uid()
+  order by coalesce(last_message.created_at, cd.created_at) desc;
+end;
+$$;
+
+revoke all on function public.motorista_listar_conversas_chat_web() from public;
+grant execute on function public.motorista_listar_conversas_chat_web() to authenticated, service_role;
+
+create or replace function public.listar_mensagens_chat_web(
+  p_candidatura_id uuid
+)
+returns table (
+  id uuid,
+  candidatura_id uuid,
+  sender_auth_user_id uuid,
+  sender_role text,
+  mensagem text,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.candidaturas_web cd
+    join public.cargas_web c on c.id = cd.carga_id
+    join public.empresas_web e on e.id = c.empresa_id
+    where cd.id = p_candidatura_id
+      and (
+        cd.motorista_auth_user_id = auth.uid()
+        or e.auth_user_id = auth.uid()
+      )
+  ) then
+    raise exception 'Conversa nao encontrada para o usuario autenticado.';
+  end if;
+
+  return query
+  select
+    cm.id,
+    cm.candidatura_id,
+    cm.sender_auth_user_id,
+    cm.sender_role,
+    cm.mensagem,
+    cm.created_at
+  from public.chat_messages_web cm
+  where cm.candidatura_id = p_candidatura_id
+  order by cm.created_at asc;
+end;
+$$;
+
+revoke all on function public.listar_mensagens_chat_web(uuid) from public;
+grant execute on function public.listar_mensagens_chat_web(uuid) to authenticated, service_role;
+
+create or replace function public.enviar_mensagem_chat_web(
+  p_candidatura_id uuid,
+  p_mensagem text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sender_role text;
+  v_message_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if trim(coalesce(p_mensagem, '')) = '' then
+    raise exception 'Mensagem vazia.';
+  end if;
+
+  select
+    case
+      when e.auth_user_id = auth.uid() then 'empresa'
+      when cd.motorista_auth_user_id = auth.uid() then 'motorista'
+      else null
+    end
+  into v_sender_role
+  from public.candidaturas_web cd
+  join public.cargas_web c on c.id = cd.carga_id
+  join public.empresas_web e on e.id = c.empresa_id
+  where cd.id = p_candidatura_id;
+
+  if v_sender_role is null then
+    raise exception 'Conversa nao encontrada para o usuario autenticado.';
+  end if;
+
+  insert into public.chat_messages_web (
+    candidatura_id,
+    sender_auth_user_id,
+    sender_role,
+    mensagem
+  )
+  values (
+    p_candidatura_id,
+    auth.uid(),
+    v_sender_role,
+    trim(p_mensagem)
+  )
+  returning id into v_message_id;
+
+  return v_message_id;
+end;
+$$;
+
+revoke all on function public.enviar_mensagem_chat_web(uuid, text) from public;
+grant execute on function public.enviar_mensagem_chat_web(uuid, text) to authenticated, service_role;
 
 create or replace function public.is_web_admin()
 returns boolean
