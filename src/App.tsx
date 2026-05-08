@@ -259,6 +259,15 @@ type CityOption = {
   state: string;
 };
 
+type PostalCodeLookupResponse = {
+  cep?: string;
+  logradouro?: string;
+  bairro?: string;
+  localidade?: string;
+  uf?: string;
+  erro?: boolean;
+};
+
 type CityField = 'pickupCity' | 'deliveryCity' | 'profileCity';
 
 function parseCurrencyToNumber(value: string) {
@@ -848,6 +857,8 @@ function App() {
   const [cityOptions, setCityOptions] = useState<CityOption[]>([]);
   const [isLoadingCities, setIsLoadingCities] = useState(false);
   const [citiesError, setCitiesError] = useState('');
+  const [isLookingUpPostalCode, setIsLookingUpPostalCode] = useState(false);
+  const [postalCodeError, setPostalCodeError] = useState('');
   const [activeCityField, setActiveCityField] = useState<CityField | null>(
     null,
   );
@@ -1463,6 +1474,93 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isEditingProfile) {
+      setIsLookingUpPostalCode(false);
+      setPostalCodeError('');
+      return;
+    }
+
+    const sanitizedPostalCode = digitsOnly(accountProfile.postalCode);
+
+    if (!sanitizedPostalCode) {
+      setPostalCodeError('');
+      setIsLookingUpPostalCode(false);
+      return;
+    }
+
+    if (sanitizedPostalCode.length < 8) {
+      setPostalCodeError('');
+      setIsLookingUpPostalCode(false);
+      return;
+    }
+
+    let isMounted = true;
+    const controller = new AbortController();
+
+    const lookupPostalCode = async () => {
+      setIsLookingUpPostalCode(true);
+      setPostalCodeError('');
+
+      try {
+        const response = await fetch(
+          `https://viacep.com.br/ws/${sanitizedPostalCode}/json/`,
+          { signal: controller.signal },
+        );
+
+        if (!response.ok) {
+          throw new Error('Não foi possível consultar o CEP agora.');
+        }
+
+        const data = (await response.json()) as PostalCodeLookupResponse;
+
+        if (!isMounted || controller.signal.aborted) {
+          return;
+        }
+
+        if (data.erro) {
+          setPostalCodeError('CEP não encontrado. Você pode preencher manualmente.');
+          return;
+        }
+
+        setAccountProfile((current) => {
+          if (digitsOnly(current.postalCode) !== sanitizedPostalCode) {
+            return current;
+          }
+
+          return {
+            ...current,
+            street: data.logradouro?.trim() || current.street,
+            neighborhood: data.bairro?.trim() || current.neighborhood,
+            city: data.localidade?.trim() || current.city,
+            state: data.uf?.trim().toUpperCase() || current.state,
+          };
+        });
+      } catch (error) {
+        if (!isMounted || controller.signal.aborted) {
+          return;
+        }
+
+        setPostalCodeError(
+          error instanceof Error
+            ? error.message
+            : 'Não foi possível consultar o CEP agora.',
+        );
+      } finally {
+        if (isMounted && !controller.signal.aborted) {
+          setIsLookingUpPostalCode(false);
+        }
+      }
+    };
+
+    void lookupPostalCode();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [accountProfile.postalCode, isEditingProfile]);
+
+  useEffect(() => {
     if (activeSection !== 'chat') {
       return;
     }
@@ -1691,6 +1789,9 @@ function App() {
     (event: ChangeEvent<HTMLInputElement>) => {
       setProfileMessage('');
       setProfileError('');
+      if (field === 'postalCode') {
+        setPostalCodeError('');
+      }
       const rawValue = event.target.value;
       setAccountProfile((current) => ({
         ...current,
@@ -1818,12 +1919,14 @@ function App() {
   const handleStartProfileEdit = () => {
     setProfileMessage('');
     setProfileError('');
+    setPostalCodeError('');
     setIsEditingProfile(true);
   };
 
   const handleCancelProfileEdit = () => {
     setProfileMessage('');
     setProfileError('');
+    setPostalCodeError('');
     setAccountProfile(savedAccountProfile);
     setActiveCityField((current) =>
       current === 'profileCity' ? null : current,
@@ -3598,6 +3701,13 @@ function App() {
                       />
                     </label>
                   </div>
+                  {(isLookingUpPostalCode || postalCodeError) && (
+                    <p className="field-grid__helper">
+                      {isLookingUpPostalCode
+                        ? 'Buscando endereço pelo CEP...'
+                        : postalCodeError}
+                    </p>
+                  )}
                   {(isLoadingCities || citiesError) && (
                     <p className="field-grid__helper">
                       {isLoadingCities
