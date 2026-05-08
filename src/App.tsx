@@ -100,6 +100,16 @@ const initialAccountProfile = {
   cnpj: '',
   phone: '',
   email: '',
+  postalCode: '',
+  street: '',
+  addressNumber: '',
+  complement: '',
+  neighborhood: '',
+  city: '',
+  state: '',
+  linkedName: '',
+  linkedCpf: '',
+  linkedCnpj: '',
 };
 
 const initialAuthForm = {
@@ -161,6 +171,16 @@ type AccountProfileRow = {
   cnpj: string | null;
   telefone: string;
   email: string | null;
+  cep: string | null;
+  logradouro: string | null;
+  numero_endereco: string | null;
+  complemento: string | null;
+  bairro: string | null;
+  cidade: string | null;
+  uf: string | null;
+  vinculado_nome: string | null;
+  vinculado_cpf: string | null;
+  vinculado_cnpj: string | null;
 };
 
 type ChatTripRow = {
@@ -239,7 +259,7 @@ type CityOption = {
   state: string;
 };
 
-type CityField = 'pickupCity' | 'deliveryCity';
+type CityField = 'pickupCity' | 'deliveryCity' | 'profileCity';
 
 function parseCurrencyToNumber(value: string) {
   const normalized = value
@@ -306,6 +326,16 @@ function formatPhone(value: string) {
   }
 
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+}
+
+function formatPostalCode(value: string) {
+  const digits = digitsOnly(value).slice(0, 8);
+
+  if (digits.length <= 5) {
+    return digits;
+  }
+
+  return `${digits.slice(0, 5)}-${digits.slice(5)}`;
 }
 
 function formatDocumentByPersonType(personType: PersonType, value: string) {
@@ -379,7 +409,9 @@ function normalizeSearchValue(value: string) {
 }
 
 function getCityStateField(cityField: CityField) {
-  return cityField === 'pickupCity' ? 'pickupState' : 'deliveryState';
+  if (cityField === 'pickupCity') return 'pickupState';
+  if (cityField === 'deliveryCity') return 'deliveryState';
+  return 'state';
 }
 
 function getChatTrip(value: ChatTripRow[] | ChatTripRow | null) {
@@ -582,13 +614,28 @@ function getAccountDocumentValue(account: {
   return account.personType === 'fisica' ? account.cpf : account.cnpj;
 }
 
-function isAccountProfileComplete(profile: AccountProfileState) {
+function hasRequiredAccountIdentity(profile: AccountProfileState) {
   return Boolean(
     profile.name.trim() &&
       getAccountDocumentValue(profile).trim() &&
       profile.phone.trim() &&
       profile.email.trim(),
   );
+}
+
+function isAddressComplete(profile: AccountProfileState) {
+  return Boolean(
+    profile.postalCode.trim() &&
+      profile.street.trim() &&
+      profile.addressNumber.trim() &&
+      profile.neighborhood.trim() &&
+      profile.city.trim() &&
+      profile.state.trim(),
+  );
+}
+
+function isAccountProfileComplete(profile: AccountProfileState) {
+  return hasRequiredAccountIdentity(profile) && isAddressComplete(profile);
 }
 
 function getAccountProfileValidationMessage(profile: AccountProfileState) {
@@ -611,6 +658,38 @@ function getAccountProfileValidationMessage(profile: AccountProfileState) {
   return '';
 }
 
+function getLinkedEntitySectionTitle(personType: PersonType) {
+  return personType === 'fisica'
+    ? 'Empresa vinculada'
+    : 'Pessoa física vinculada';
+}
+
+function getLinkedEntityNameLabel(personType: PersonType) {
+  return personType === 'fisica' ? 'Razão social' : 'Nome completo';
+}
+
+function getLinkedEntityNamePlaceholder(personType: PersonType) {
+  return personType === 'fisica'
+    ? 'Ex.: Transportadora Vale do Norte LTDA'
+    : 'Ex.: Maria Aparecida Silva';
+}
+
+function getLinkedEntityDocumentLabel(personType: PersonType) {
+  return personType === 'fisica' ? 'CNPJ' : 'CPF';
+}
+
+function getLinkedEntityDocumentPlaceholder(personType: PersonType) {
+  return personType === 'fisica'
+    ? '00.000.000/0000-00'
+    : '000.000.000-00';
+}
+
+function getLinkedEntityDocumentValue(profile: AccountProfileState) {
+  return profile.personType === 'fisica'
+    ? profile.linkedCnpj
+    : profile.linkedCpf;
+}
+
 function buildAccountProfileFromAuthForm(authForm: AuthFormState) {
   return {
     personType: authForm.personType,
@@ -619,6 +698,16 @@ function buildAccountProfileFromAuthForm(authForm: AuthFormState) {
     cnpj: authForm.personType === 'juridica' ? formatCnpj(authForm.cnpj) : '',
     phone: formatPhone(authForm.phone),
     email: authForm.email,
+    postalCode: '',
+    street: '',
+    addressNumber: '',
+    complement: '',
+    neighborhood: '',
+    city: '',
+    state: '',
+    linkedName: '',
+    linkedCpf: '',
+    linkedCnpj: '',
   } satisfies AccountProfileState;
 }
 
@@ -661,6 +750,16 @@ function getAccountProfileFromMetadata(
     cnpj: personType === 'juridica' ? formatCnpj(cnpj) : '',
     phone: formatPhone(phone),
     email,
+    postalCode: '',
+    street: '',
+    addressNumber: '',
+    complement: '',
+    neighborhood: '',
+    city: '',
+    state: '',
+    linkedName: '',
+    linkedCpf: '',
+    linkedCnpj: '',
   } satisfies AccountProfileState;
 }
 
@@ -716,6 +815,9 @@ function App() {
   const [accountProfile, setAccountProfile] = useState<AccountProfileState>(
     initialAccountProfile,
   );
+  const [savedAccountProfile, setSavedAccountProfile] =
+    useState<AccountProfileState>(initialAccountProfile);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileMessage, setProfileMessage] = useState('');
   const [profileError, setProfileError] = useState('');
@@ -780,6 +882,22 @@ function App() {
       cnpj: profile.personType === 'juridica' ? formatCnpj(profile.cnpj.trim()) : '',
       phone: formatPhone(profile.phone.trim()),
       email: profile.email.trim() || session?.user.email || '',
+      postalCode: formatPostalCode(profile.postalCode.trim()),
+      street: profile.street.trim(),
+      addressNumber: profile.addressNumber.trim(),
+      complement: profile.complement.trim(),
+      neighborhood: profile.neighborhood.trim(),
+      city: profile.city.trim(),
+      state: profile.state.trim().toUpperCase(),
+      linkedName: profile.linkedName.trim(),
+      linkedCpf:
+        profile.personType === 'juridica'
+          ? formatCpf(profile.linkedCpf.trim())
+          : '',
+      linkedCnpj:
+        profile.personType === 'fisica'
+          ? formatCnpj(profile.linkedCnpj.trim())
+          : '',
     } satisfies AccountProfileState;
 
     const { error } = await supabase.rpc('salvar_conta_web', {
@@ -790,6 +908,16 @@ function App() {
       p_telefone: digitsOnly(normalizedProfile.phone),
       p_email: normalizedProfile.email || null,
       p_responsavel: null,
+      p_cep: digitsOnly(normalizedProfile.postalCode) || null,
+      p_logradouro: normalizedProfile.street || null,
+      p_numero_endereco: normalizedProfile.addressNumber || null,
+      p_complemento: normalizedProfile.complement || null,
+      p_bairro: normalizedProfile.neighborhood || null,
+      p_cidade: normalizedProfile.city || null,
+      p_uf: normalizedProfile.state || null,
+      p_vinculado_nome: normalizedProfile.linkedName || null,
+      p_vinculado_cpf: digitsOnly(normalizedProfile.linkedCpf) || null,
+      p_vinculado_cnpj: digitsOnly(normalizedProfile.linkedCnpj) || null,
     });
 
     if (error) {
@@ -805,6 +933,8 @@ function App() {
     }
 
     setAccountProfile(normalizedProfile);
+    setSavedAccountProfile(normalizedProfile);
+    setIsEditingProfile(false);
 
     if (options?.showFeedback !== false) {
       setProfileError('');
@@ -821,12 +951,16 @@ function App() {
   const loadAccountProfile = async () => {
     if (!session) {
       setAccountProfile(initialAccountProfile);
+      setSavedAccountProfile(initialAccountProfile);
+      setIsEditingProfile(false);
       return;
     }
 
     const { data, error } = await supabase
       .from('empresas_web')
-      .select('tipo_pessoa, nome, cpf, cnpj, telefone, email')
+      .select(
+        'tipo_pessoa, nome, cpf, cnpj, telefone, email, cep, logradouro, numero_endereco, complemento, bairro, cidade, uf, vinculado_nome, vinculado_cpf, vinculado_cnpj',
+      )
       .maybeSingle();
 
     if (error) {
@@ -843,6 +977,7 @@ function App() {
 
       if (metadataProfile) {
         setAccountProfile(metadataProfile);
+        setSavedAccountProfile(metadataProfile);
         await persistAccountProfile(metadataProfile, { showFeedback: false });
         return;
       }
@@ -851,19 +986,37 @@ function App() {
         ...current,
         email: current.email || session.user.email || '',
       }));
+      setSavedAccountProfile((current) => ({
+        ...current,
+        email: current.email || session.user.email || '',
+      }));
       return;
     }
 
     const profile = data as AccountProfileRow;
 
-    setAccountProfile({
+    const nextProfile = {
       personType: normalizePersonType(profile.tipo_pessoa),
       name: profile.nome,
       cpf: formatCpf(profile.cpf || ''),
       cnpj: formatCnpj(profile.cnpj || ''),
       phone: formatPhone(profile.telefone),
       email: profile.email || session.user.email || '',
-    });
+      postalCode: formatPostalCode(profile.cep || ''),
+      street: profile.logradouro || '',
+      addressNumber: profile.numero_endereco || '',
+      complement: profile.complemento || '',
+      neighborhood: profile.bairro || '',
+      city: profile.cidade || '',
+      state: (profile.uf || '').toUpperCase(),
+      linkedName: profile.vinculado_nome || '',
+      linkedCpf: formatCpf(profile.vinculado_cpf || ''),
+      linkedCnpj: formatCnpj(profile.vinculado_cnpj || ''),
+    } satisfies AccountProfileState;
+
+    setAccountProfile(nextProfile);
+    setSavedAccountProfile(nextProfile);
+    setIsEditingProfile(false);
   };
 
   const loadCompanyCargos = async () => {
@@ -1456,22 +1609,42 @@ function App() {
           normalizeSearchValue(city.name) === normalizeSearchValue(value),
       );
 
-      setForm((current) => ({
-        ...current,
-        [field]: value,
-        [stateField]: exactMatches.length === 1 ? exactMatches[0].state : '',
-      }));
+      if (field === 'profileCity') {
+        setProfileMessage('');
+        setProfileError('');
+        setAccountProfile((current) => ({
+          ...current,
+          city: value,
+          state: exactMatches.length === 1 ? exactMatches[0].state : '',
+        }));
+      } else {
+        setForm((current) => ({
+          ...current,
+          [field]: value,
+          [stateField]: exactMatches.length === 1 ? exactMatches[0].state : '',
+        }));
+      }
       setActiveCityField(field);
     };
 
   const handleCitySelect = (field: CityField, city: CityOption) => {
-    const stateField = getCityStateField(field);
+    if (field === 'profileCity') {
+      setProfileMessage('');
+      setProfileError('');
+      setAccountProfile((current) => ({
+        ...current,
+        city: city.name,
+        state: city.state,
+      }));
+    } else {
+      const stateField = getCityStateField(field);
 
-    setForm((current) => ({
-      ...current,
-      [field]: city.name,
-      [stateField]: city.state,
-    }));
+      setForm((current) => ({
+        ...current,
+        [field]: city.name,
+        [stateField]: city.state,
+      }));
+    }
     setActiveCityField(null);
   };
 
@@ -1526,22 +1699,19 @@ function App() {
             ? formatCpf(rawValue)
             : field === 'cnpj'
               ? formatCnpj(rawValue)
+              : field === 'linkedCpf'
+                ? formatCpf(rawValue)
+                : field === 'linkedCnpj'
+                  ? formatCnpj(rawValue)
+                  : field === 'postalCode'
+                    ? formatPostalCode(rawValue)
+                    : field === 'state'
+                      ? rawValue.toUpperCase()
               : field === 'phone'
                 ? formatPhone(rawValue)
                 : rawValue,
       }));
     };
-
-  const handleAccountPersonTypeChange = (personType: PersonType) => {
-    setProfileMessage('');
-    setProfileError('');
-    setAccountProfile((current) => ({
-      ...current,
-      personType,
-      cpf: personType === 'fisica' ? current.cpf : '',
-      cnpj: personType === 'juridica' ? current.cnpj : '',
-    }));
-  };
 
   const handleAdminFilterChange =
     (field: keyof AdminFilters) =>
@@ -1645,11 +1815,28 @@ function App() {
     setIsSavingProfile(false);
   };
 
+  const handleStartProfileEdit = () => {
+    setProfileMessage('');
+    setProfileError('');
+    setIsEditingProfile(true);
+  };
+
+  const handleCancelProfileEdit = () => {
+    setProfileMessage('');
+    setProfileError('');
+    setAccountProfile(savedAccountProfile);
+    setActiveCityField((current) =>
+      current === 'profileCity' ? null : current,
+    );
+    setIsEditingProfile(false);
+  };
+
   const handleLogout = async () => {
     setAuthMessage('');
     setAuthError('');
     setProfileMessage('');
     setProfileError('');
+    setIsEditingProfile(false);
     setAdminFilters(initialAdminFilters);
     await supabase.auth.signOut();
   };
@@ -1685,7 +1872,7 @@ function App() {
     setSubmitMessage('');
     setSubmitError('');
 
-    const hasCompleteAccountProfile = isAccountProfileComplete(accountProfile);
+    const hasCompleteAccountProfile = hasRequiredAccountIdentity(accountProfile);
 
     if (!hasCompleteAccountProfile) {
       setIsSubmitting(false);
@@ -2027,6 +2214,17 @@ function App() {
           .filter((city) =>
             normalizeSearchValue(city.name).includes(
               normalizeSearchValue(form.deliveryCity),
+            ),
+          )
+          .slice(0, 8)
+      : [];
+
+  const profileCitySuggestions =
+    accountProfile.city.trim().length >= 2
+      ? cityOptions
+          .filter((city) =>
+            normalizeSearchValue(city.name).includes(
+              normalizeSearchValue(accountProfile.city),
             ),
           )
           .slice(0, 8)
@@ -3176,7 +3374,7 @@ function App() {
               <div className="section-hero">
                 <div className="section-heading">
                   <span>Perfil da conta</span>
-                  <h2>Dados básicos usados nas publicações.</h2>
+                  <h2>Dados básicos da conta e informações complementares do perfil.</h2>
                 </div>
                 <span className="section-hero__icon">
                   <SidebarIcon name="perfil" />
@@ -3208,36 +3406,42 @@ function App() {
 
               <form className="cargo-form profile-form" onSubmit={handleProfileSubmit}>
                 <div className="form-block">
-                  <h3>Dados principais da conta</h3>
-                  <div className="auth-choice-group auth-choice-group--profile">
-                    <span className="auth-choice-group__label">Tipo de cadastro</span>
-                    <div className="auth-toggle">
-                      <button
-                        className={
-                          accountProfile.personType === 'fisica'
-                            ? 'auth-toggle__button is-active'
-                            : 'auth-toggle__button'
-                        }
-                        type="button"
-                        onClick={() => handleAccountPersonTypeChange('fisica')}
-                      >
-                        Pessoa física
-                      </button>
-                      <button
-                        className={
-                          accountProfile.personType === 'juridica'
-                            ? 'auth-toggle__button is-active'
-                            : 'auth-toggle__button'
-                        }
-                        type="button"
-                        onClick={() => handleAccountPersonTypeChange('juridica')}
-                      >
-                        Pessoa jurídica
-                      </button>
+                  <div className="profile-form__header">
+                    <div className="profile-form__intro">
+                      <h3>Dados principais da conta</h3>
+                      <p>
+                        O tipo de cadastro é definido na criação da conta. Para trocar
+                        de tipo, crie uma nova conta.
+                      </p>
                     </div>
+                    {!isEditingProfile ? (
+                      <button
+                        className="button button--ghost"
+                        type="button"
+                        onClick={handleStartProfileEdit}
+                      >
+                        Editar dados
+                      </button>
+                    ) : (
+                      <button
+                        className="button button--ghost"
+                        type="button"
+                        onClick={handleCancelProfileEdit}
+                      >
+                        Cancelar edição
+                      </button>
+                    )}
                   </div>
 
                   <div className="field-grid field-grid--two">
+                    <label className="field-grid__full">
+                      Tipo de cadastro
+                      <input
+                        type="text"
+                        value={getPersonTypeLabel(accountProfile.personType)}
+                        disabled
+                      />
+                    </label>
                     <label>
                       {getAccountNameLabel(accountProfile.personType)}
                       <input
@@ -3246,6 +3450,7 @@ function App() {
                         placeholder={getAccountNamePlaceholder(accountProfile.personType)}
                         value={accountProfile.name}
                         onChange={handleAccountProfileChange('name')}
+                        disabled={!isEditingProfile}
                       />
                     </label>
                     <label>
@@ -3258,6 +3463,7 @@ function App() {
                         onChange={handleAccountProfileChange(
                           accountProfile.personType === 'fisica' ? 'cpf' : 'cnpj',
                         )}
+                        disabled={!isEditingProfile}
                       />
                     </label>
                     <label>
@@ -3268,6 +3474,7 @@ function App() {
                         placeholder="(00) 00000-0000"
                         value={accountProfile.phone}
                         onChange={handleAccountProfileChange('phone')}
+                        disabled={!isEditingProfile}
                       />
                     </label>
                     <label>
@@ -3278,6 +3485,162 @@ function App() {
                         placeholder="voce@exemplo.com.br"
                         value={accountProfile.email}
                         onChange={handleAccountProfileChange('email')}
+                        disabled={!isEditingProfile}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="form-block">
+                  <h3>Endereço</h3>
+                  <div className="field-grid field-grid--two">
+                    <label>
+                      CEP
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="00000-000"
+                        value={accountProfile.postalCode}
+                        onChange={handleAccountProfileChange('postalCode')}
+                        disabled={!isEditingProfile}
+                      />
+                    </label>
+                    <label>
+                      Bairro
+                      <input
+                        type="text"
+                        placeholder="Ex.: Centro"
+                        value={accountProfile.neighborhood}
+                        onChange={handleAccountProfileChange('neighborhood')}
+                        disabled={!isEditingProfile}
+                      />
+                    </label>
+                    <label className="field-grid__full">
+                      Logradouro
+                      <input
+                        type="text"
+                        placeholder="Ex.: Rua das Palmeiras"
+                        value={accountProfile.street}
+                        onChange={handleAccountProfileChange('street')}
+                        disabled={!isEditingProfile}
+                      />
+                    </label>
+                    <label>
+                      Número
+                      <input
+                        type="text"
+                        placeholder="Ex.: 125"
+                        value={accountProfile.addressNumber}
+                        onChange={handleAccountProfileChange('addressNumber')}
+                        disabled={!isEditingProfile}
+                      />
+                    </label>
+                    <label>
+                      Complemento
+                      <input
+                        type="text"
+                        placeholder="Ex.: Sala 03"
+                        value={accountProfile.complement}
+                        onChange={handleAccountProfileChange('complement')}
+                        disabled={!isEditingProfile}
+                      />
+                    </label>
+                    <label>
+                      Cidade
+                      <div className="city-autocomplete">
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          placeholder="Ex.: Joinville"
+                          value={accountProfile.city}
+                          onChange={handleCityFieldChange('profileCity')}
+                          onFocus={() => {
+                            if (isEditingProfile) {
+                              setActiveCityField('profileCity');
+                            }
+                          }}
+                          onBlur={() => {
+                            window.setTimeout(() => setActiveCityField(null), 120);
+                          }}
+                          disabled={!isEditingProfile}
+                        />
+                        {isEditingProfile &&
+                          activeCityField === 'profileCity' &&
+                          profileCitySuggestions.length > 0 && (
+                            <div className="city-autocomplete__menu">
+                              {profileCitySuggestions.map((city) => (
+                                <button
+                                  key={`profile-${city.id}`}
+                                  className="city-autocomplete__option"
+                                  type="button"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    handleCitySelect('profileCity', city);
+                                  }}
+                                >
+                                  <strong>{city.name}</strong>
+                                  <span>{city.state}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                      </div>
+                    </label>
+                    <label>
+                      UF
+                      <input
+                        type="text"
+                        placeholder="SC"
+                        maxLength={2}
+                        value={accountProfile.state}
+                        onChange={handleAccountProfileChange('state')}
+                        disabled={!isEditingProfile}
+                      />
+                    </label>
+                  </div>
+                  {(isLoadingCities || citiesError) && (
+                    <p className="field-grid__helper">
+                      {isLoadingCities
+                        ? 'Carregando lista oficial de cidades...'
+                        : `${citiesError} Você ainda pode preencher manualmente se preferir.`}
+                    </p>
+                  )}
+                </div>
+
+                <div className="form-block">
+                  <h3>{getLinkedEntitySectionTitle(accountProfile.personType)}</h3>
+                  <p className="field-grid__helper">
+                    {accountProfile.personType === 'fisica'
+                      ? 'Se quiser, vincule uma empresa a esta conta de pessoa física.'
+                      : 'Se quiser, vincule uma pessoa física responsável a esta conta jurídica.'}
+                  </p>
+                  <div className="field-grid field-grid--two">
+                    <label>
+                      {getLinkedEntityNameLabel(accountProfile.personType)}
+                      <input
+                        type="text"
+                        placeholder={getLinkedEntityNamePlaceholder(
+                          accountProfile.personType,
+                        )}
+                        value={accountProfile.linkedName}
+                        onChange={handleAccountProfileChange('linkedName')}
+                        disabled={!isEditingProfile}
+                      />
+                    </label>
+                    <label>
+                      {getLinkedEntityDocumentLabel(accountProfile.personType)}
+                      <input
+                        type="text"
+                        placeholder={getLinkedEntityDocumentPlaceholder(
+                          accountProfile.personType,
+                        )}
+                        value={getLinkedEntityDocumentValue(accountProfile)}
+                        onChange={handleAccountProfileChange(
+                          accountProfile.personType === 'fisica'
+                            ? 'linkedCnpj'
+                            : 'linkedCpf',
+                        )}
+                        disabled={!isEditingProfile}
                       />
                     </label>
                   </div>
@@ -3290,13 +3653,15 @@ function App() {
                 )}
 
                 <div className="form-actions">
-                  <button
-                    className="button button--primary"
-                    type="submit"
-                    disabled={isSavingProfile}
-                  >
-                    {isSavingProfile ? 'Salvando...' : 'Salvar dados da conta'}
-                  </button>
+                  {isEditingProfile && (
+                    <button
+                      className="button button--primary"
+                      type="submit"
+                      disabled={isSavingProfile}
+                    >
+                      {isSavingProfile ? 'Salvando...' : 'Salvar alterações'}
+                    </button>
+                  )}
                   <button
                     className="button button--ghost"
                     type="button"

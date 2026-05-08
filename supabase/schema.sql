@@ -20,6 +20,16 @@ create table if not exists public.empresas_web (
   responsavel text,
   telefone text not null,
   email text,
+  cep text,
+  logradouro text,
+  numero_endereco text,
+  complemento text,
+  bairro text,
+  cidade text,
+  uf char(2),
+  vinculado_nome text,
+  vinculado_cpf text,
+  vinculado_cnpj text,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
@@ -29,6 +39,36 @@ alter table public.empresas_web
 
 alter table public.empresas_web
   add column if not exists cpf text;
+
+alter table public.empresas_web
+  add column if not exists cep text;
+
+alter table public.empresas_web
+  add column if not exists logradouro text;
+
+alter table public.empresas_web
+  add column if not exists numero_endereco text;
+
+alter table public.empresas_web
+  add column if not exists complemento text;
+
+alter table public.empresas_web
+  add column if not exists bairro text;
+
+alter table public.empresas_web
+  add column if not exists cidade text;
+
+alter table public.empresas_web
+  add column if not exists uf char(2);
+
+alter table public.empresas_web
+  add column if not exists vinculado_nome text;
+
+alter table public.empresas_web
+  add column if not exists vinculado_cpf text;
+
+alter table public.empresas_web
+  add column if not exists vinculado_cnpj text;
 
 alter table public.empresas_web
   alter column tipo_pessoa set default 'juridica';
@@ -47,7 +87,17 @@ set
   end,
   cpf = nullif(trim(coalesce(cpf, '')), ''),
   cnpj = nullif(trim(coalesce(cnpj, '')), ''),
-  responsavel = nullif(trim(coalesce(responsavel, '')), '')
+  responsavel = nullif(trim(coalesce(responsavel, '')), ''),
+  cep = nullif(trim(coalesce(cep, '')), ''),
+  logradouro = nullif(trim(coalesce(logradouro, '')), ''),
+  numero_endereco = nullif(trim(coalesce(numero_endereco, '')), ''),
+  complemento = nullif(trim(coalesce(complemento, '')), ''),
+  bairro = nullif(trim(coalesce(bairro, '')), ''),
+  cidade = nullif(trim(coalesce(cidade, '')), ''),
+  uf = nullif(upper(trim(coalesce(uf, ''))), ''),
+  vinculado_nome = nullif(trim(coalesce(vinculado_nome, '')), ''),
+  vinculado_cpf = nullif(trim(coalesce(vinculado_cpf, '')), ''),
+  vinculado_cnpj = nullif(trim(coalesce(vinculado_cnpj, '')), '')
 where tipo_pessoa is null
    or trim(tipo_pessoa) = ''
    or cpf is not null
@@ -59,6 +109,12 @@ alter table public.empresas_web
 
 create unique index if not exists empresas_web_cpf_key
 on public.empresas_web (cpf);
+
+create unique index if not exists empresas_web_vinculado_cpf_key
+on public.empresas_web (vinculado_cpf);
+
+create unique index if not exists empresas_web_vinculado_cnpj_key
+on public.empresas_web (vinculado_cnpj);
 
 do $$
 begin
@@ -275,7 +331,17 @@ create or replace function public.salvar_conta_web(
   p_cnpj text,
   p_telefone text,
   p_email text,
-  p_responsavel text default null
+  p_responsavel text default null,
+  p_cep text default null,
+  p_logradouro text default null,
+  p_numero_endereco text default null,
+  p_complemento text default null,
+  p_bairro text default null,
+  p_cidade text default null,
+  p_uf text default null,
+  p_vinculado_nome text default null,
+  p_vinculado_cpf text default null,
+  p_vinculado_cnpj text default null
 )
 returns uuid
 language plpgsql
@@ -291,6 +357,16 @@ declare
   v_responsavel text;
   v_telefone text;
   v_email text;
+  v_cep text;
+  v_logradouro text;
+  v_numero_endereco text;
+  v_complemento text;
+  v_bairro text;
+  v_cidade text;
+  v_uf text;
+  v_vinculado_nome text;
+  v_vinculado_cpf text;
+  v_vinculado_cnpj text;
   v_conta_id uuid;
 begin
   v_auth_user_id := auth.uid();
@@ -300,6 +376,16 @@ begin
   v_cnpj := trim(coalesce(p_cnpj, ''));
   v_responsavel := nullif(trim(coalesce(p_responsavel, '')), '');
   v_telefone := trim(coalesce(p_telefone, ''));
+  v_cep := nullif(trim(coalesce(p_cep, '')), '');
+  v_logradouro := nullif(trim(coalesce(p_logradouro, '')), '');
+  v_numero_endereco := nullif(trim(coalesce(p_numero_endereco, '')), '');
+  v_complemento := nullif(trim(coalesce(p_complemento, '')), '');
+  v_bairro := nullif(trim(coalesce(p_bairro, '')), '');
+  v_cidade := nullif(trim(coalesce(p_cidade, '')), '');
+  v_uf := nullif(upper(trim(coalesce(p_uf, ''))), '');
+  v_vinculado_nome := nullif(trim(coalesce(p_vinculado_nome, '')), '');
+  v_vinculado_cpf := nullif(trim(coalesce(p_vinculado_cpf, '')), '');
+  v_vinculado_cnpj := nullif(trim(coalesce(p_vinculado_cnpj, '')), '');
   v_email := coalesce(
     nullif(trim(coalesce(p_email, '')), ''),
     nullif(trim(coalesce(auth.jwt() ->> 'email', '')), '')
@@ -323,12 +409,14 @@ begin
     end if;
 
     v_cnpj := null;
+    v_vinculado_cpf := null;
   else
     if v_cnpj = '' then
       raise exception 'Informe o CNPJ para o cadastro de pessoa juridica.';
     end if;
 
     v_cpf := null;
+    v_vinculado_cnpj := null;
   end if;
 
   v_cpf := nullif(v_cpf, '');
@@ -359,6 +447,24 @@ begin
       raise exception 'Ja existe outra conta com este CNPJ.';
     end if;
 
+    if v_vinculado_cpf is not null and exists (
+      select 1
+      from public.empresas_web ew
+      where ew.vinculado_cpf = v_vinculado_cpf
+        and ew.id <> v_conta_id
+    ) then
+      raise exception 'Ja existe outra conta com esta pessoa fisica vinculada.';
+    end if;
+
+    if v_vinculado_cnpj is not null and exists (
+      select 1
+      from public.empresas_web ew
+      where ew.vinculado_cnpj = v_vinculado_cnpj
+        and ew.id <> v_conta_id
+    ) then
+      raise exception 'Ja existe outra conta com esta empresa vinculada.';
+    end if;
+
     update public.empresas_web
     set
       tipo_pessoa = v_tipo_pessoa,
@@ -368,6 +474,16 @@ begin
       responsavel = v_responsavel,
       telefone = v_telefone,
       email = v_email,
+      cep = v_cep,
+      logradouro = v_logradouro,
+      numero_endereco = v_numero_endereco,
+      complemento = v_complemento,
+      bairro = v_bairro,
+      cidade = v_cidade,
+      uf = v_uf,
+      vinculado_nome = v_vinculado_nome,
+      vinculado_cpf = v_vinculado_cpf,
+      vinculado_cnpj = v_vinculado_cnpj,
       updated_at = timezone('utc', now())
     where id = v_conta_id
     returning id into v_conta_id;
@@ -385,6 +501,16 @@ begin
     responsavel = v_responsavel,
     telefone = v_telefone,
     email = v_email,
+    cep = v_cep,
+    logradouro = v_logradouro,
+    numero_endereco = v_numero_endereco,
+    complemento = v_complemento,
+    bairro = v_bairro,
+    cidade = v_cidade,
+    uf = v_uf,
+    vinculado_nome = v_vinculado_nome,
+    vinculado_cpf = v_vinculado_cpf,
+    vinculado_cnpj = v_vinculado_cnpj,
     updated_at = timezone('utc', now())
   where (
       (v_tipo_pessoa = 'fisica' and cpf = v_cpf)
@@ -406,7 +532,17 @@ begin
       cnpj,
       responsavel,
       telefone,
-      email
+      email,
+      cep,
+      logradouro,
+      numero_endereco,
+      complemento,
+      bairro,
+      cidade,
+      uf,
+      vinculado_nome,
+      vinculado_cpf,
+      vinculado_cnpj
     )
     values (
       v_auth_user_id,
@@ -416,7 +552,17 @@ begin
       v_cnpj,
       v_responsavel,
       v_telefone,
-      v_email
+      v_email,
+      v_cep,
+      v_logradouro,
+      v_numero_endereco,
+      v_complemento,
+      v_bairro,
+      v_cidade,
+      v_uf,
+      v_vinculado_nome,
+      v_vinculado_cpf,
+      v_vinculado_cnpj
     )
     returning id into v_conta_id;
   exception
@@ -432,8 +578,8 @@ begin
 end;
 $$;
 
-revoke all on function public.salvar_conta_web(text, text, text, text, text, text, text) from public;
-grant execute on function public.salvar_conta_web(text, text, text, text, text, text, text) to authenticated, service_role;
+revoke all on function public.salvar_conta_web(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text) from public;
+grant execute on function public.salvar_conta_web(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text) to authenticated, service_role;
 
 create or replace function public.salvar_empresa_web(
   p_nome text,

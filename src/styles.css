@@ -845,6 +845,25 @@ button {
   max-width: 920px;
 }
 
+.profile-form__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.profile-form__intro {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-form__intro p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
 .profile-form .form-block {
   position: relative;
   overflow: hidden;
@@ -971,6 +990,14 @@ button {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(225, 111, 18, 0.12);
   background: #ffffff;
+}
+
+.field-grid input:disabled,
+.field-grid select:disabled,
+.field-grid textarea:disabled {
+  background: #f8fafc;
+  color: #475467;
+  cursor: not-allowed;
 }
 
 .form-actions {
@@ -1873,6 +1900,11 @@ button {
 
   .topbar .button {
     width: 100%;
+  }
+
+  .profile-form__header {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .hero {
