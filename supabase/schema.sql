@@ -13,14 +13,122 @@ $$;
 create table if not exists public.empresas_web (
   id uuid primary key default gen_random_uuid(),
   auth_user_id uuid unique references auth.users(id) on delete set null,
+  tipo_pessoa text not null default 'juridica',
   nome text not null,
-  cnpj text not null unique,
-  responsavel text not null,
+  cpf text unique,
+  cnpj text unique,
+  responsavel text,
   telefone text not null,
   email text,
+  cep text,
+  logradouro text,
+  numero_endereco text,
+  complemento text,
+  bairro text,
+  cidade text,
+  uf char(2),
+  vinculado_nome text,
+  vinculado_cpf text,
+  vinculado_cnpj text,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.empresas_web
+  add column if not exists tipo_pessoa text;
+
+alter table public.empresas_web
+  add column if not exists cpf text;
+
+alter table public.empresas_web
+  add column if not exists cep text;
+
+alter table public.empresas_web
+  add column if not exists logradouro text;
+
+alter table public.empresas_web
+  add column if not exists numero_endereco text;
+
+alter table public.empresas_web
+  add column if not exists complemento text;
+
+alter table public.empresas_web
+  add column if not exists bairro text;
+
+alter table public.empresas_web
+  add column if not exists cidade text;
+
+alter table public.empresas_web
+  add column if not exists uf char(2);
+
+alter table public.empresas_web
+  add column if not exists vinculado_nome text;
+
+alter table public.empresas_web
+  add column if not exists vinculado_cpf text;
+
+alter table public.empresas_web
+  add column if not exists vinculado_cnpj text;
+
+alter table public.empresas_web
+  alter column tipo_pessoa set default 'juridica';
+
+alter table public.empresas_web
+  alter column cnpj drop not null;
+
+alter table public.empresas_web
+  alter column responsavel drop not null;
+
+update public.empresas_web
+set
+  tipo_pessoa = case
+    when coalesce(nullif(trim(coalesce(cpf, '')), ''), null) is not null then 'fisica'
+    else 'juridica'
+  end,
+  cpf = nullif(trim(coalesce(cpf, '')), ''),
+  cnpj = nullif(trim(coalesce(cnpj, '')), ''),
+  responsavel = nullif(trim(coalesce(responsavel, '')), ''),
+  cep = nullif(trim(coalesce(cep, '')), ''),
+  logradouro = nullif(trim(coalesce(logradouro, '')), ''),
+  numero_endereco = nullif(trim(coalesce(numero_endereco, '')), ''),
+  complemento = nullif(trim(coalesce(complemento, '')), ''),
+  bairro = nullif(trim(coalesce(bairro, '')), ''),
+  cidade = nullif(trim(coalesce(cidade, '')), ''),
+  uf = nullif(upper(trim(coalesce(uf, ''))), ''),
+  vinculado_nome = nullif(trim(coalesce(vinculado_nome, '')), ''),
+  vinculado_cpf = nullif(trim(coalesce(vinculado_cpf, '')), ''),
+  vinculado_cnpj = nullif(trim(coalesce(vinculado_cnpj, '')), '')
+where tipo_pessoa is null
+   or trim(tipo_pessoa) = ''
+   or cpf is not null
+   or cnpj is not null
+   or responsavel is not null;
+
+alter table public.empresas_web
+  alter column tipo_pessoa set not null;
+
+create unique index if not exists empresas_web_cpf_key
+on public.empresas_web (cpf);
+
+create unique index if not exists empresas_web_vinculado_cpf_key
+on public.empresas_web (vinculado_cpf);
+
+create unique index if not exists empresas_web_vinculado_cnpj_key
+on public.empresas_web (vinculado_cnpj);
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'empresas_web_tipo_pessoa_check'
+  ) then
+    alter table public.empresas_web
+      add constraint empresas_web_tipo_pessoa_check
+      check (tipo_pessoa in ('fisica', 'juridica'));
+  end if;
+end;
+$$;
 
 create table if not exists public.cargas_web (
   id uuid primary key default gen_random_uuid(),
@@ -216,6 +324,263 @@ using (
   )
 );
 
+create or replace function public.salvar_conta_web(
+  p_tipo_pessoa text,
+  p_nome text,
+  p_cpf text,
+  p_cnpj text,
+  p_telefone text,
+  p_email text,
+  p_responsavel text default null,
+  p_cep text default null,
+  p_logradouro text default null,
+  p_numero_endereco text default null,
+  p_complemento text default null,
+  p_bairro text default null,
+  p_cidade text default null,
+  p_uf text default null,
+  p_vinculado_nome text default null,
+  p_vinculado_cpf text default null,
+  p_vinculado_cnpj text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_auth_user_id uuid;
+  v_tipo_pessoa text;
+  v_nome text;
+  v_cpf text;
+  v_cnpj text;
+  v_responsavel text;
+  v_telefone text;
+  v_email text;
+  v_cep text;
+  v_logradouro text;
+  v_numero_endereco text;
+  v_complemento text;
+  v_bairro text;
+  v_cidade text;
+  v_uf text;
+  v_vinculado_nome text;
+  v_vinculado_cpf text;
+  v_vinculado_cnpj text;
+  v_conta_id uuid;
+begin
+  v_auth_user_id := auth.uid();
+  v_tipo_pessoa := lower(trim(coalesce(p_tipo_pessoa, '')));
+  v_nome := trim(coalesce(p_nome, ''));
+  v_cpf := trim(coalesce(p_cpf, ''));
+  v_cnpj := trim(coalesce(p_cnpj, ''));
+  v_responsavel := nullif(trim(coalesce(p_responsavel, '')), '');
+  v_telefone := trim(coalesce(p_telefone, ''));
+  v_cep := nullif(trim(coalesce(p_cep, '')), '');
+  v_logradouro := nullif(trim(coalesce(p_logradouro, '')), '');
+  v_numero_endereco := nullif(trim(coalesce(p_numero_endereco, '')), '');
+  v_complemento := nullif(trim(coalesce(p_complemento, '')), '');
+  v_bairro := nullif(trim(coalesce(p_bairro, '')), '');
+  v_cidade := nullif(trim(coalesce(p_cidade, '')), '');
+  v_uf := nullif(upper(trim(coalesce(p_uf, ''))), '');
+  v_vinculado_nome := nullif(trim(coalesce(p_vinculado_nome, '')), '');
+  v_vinculado_cpf := nullif(trim(coalesce(p_vinculado_cpf, '')), '');
+  v_vinculado_cnpj := nullif(trim(coalesce(p_vinculado_cnpj, '')), '');
+  v_email := coalesce(
+    nullif(trim(coalesce(p_email, '')), ''),
+    nullif(trim(coalesce(auth.jwt() ->> 'email', '')), '')
+  );
+
+  if v_auth_user_id is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if v_tipo_pessoa not in ('fisica', 'juridica') then
+    raise exception 'Tipo de conta invalido.';
+  end if;
+
+  if v_nome = '' or v_telefone = '' then
+    raise exception 'Dados principais da conta incompletos.';
+  end if;
+
+  if v_tipo_pessoa = 'fisica' then
+    if v_cpf = '' then
+      raise exception 'Informe o CPF para o cadastro de pessoa fisica.';
+    end if;
+
+    v_cnpj := null;
+    v_vinculado_cpf := null;
+  else
+    if v_cnpj = '' then
+      raise exception 'Informe o CNPJ para o cadastro de pessoa juridica.';
+    end if;
+
+    v_cpf := null;
+    v_vinculado_cnpj := null;
+  end if;
+
+  v_cpf := nullif(v_cpf, '');
+  v_cnpj := nullif(v_cnpj, '');
+
+  select ew.id
+  into v_conta_id
+  from public.empresas_web ew
+  where ew.auth_user_id = v_auth_user_id
+  limit 1;
+
+  if v_conta_id is not null then
+    if v_cpf is not null and exists (
+      select 1
+      from public.empresas_web ew
+      where ew.cpf = v_cpf
+        and ew.id <> v_conta_id
+    ) then
+      raise exception 'Ja existe outra conta com este CPF.';
+    end if;
+
+    if v_cnpj is not null and exists (
+      select 1
+      from public.empresas_web ew
+      where ew.cnpj = v_cnpj
+        and ew.id <> v_conta_id
+    ) then
+      raise exception 'Ja existe outra conta com este CNPJ.';
+    end if;
+
+    if v_vinculado_cpf is not null and exists (
+      select 1
+      from public.empresas_web ew
+      where ew.vinculado_cpf = v_vinculado_cpf
+        and ew.id <> v_conta_id
+    ) then
+      raise exception 'Ja existe outra conta com esta pessoa fisica vinculada.';
+    end if;
+
+    if v_vinculado_cnpj is not null and exists (
+      select 1
+      from public.empresas_web ew
+      where ew.vinculado_cnpj = v_vinculado_cnpj
+        and ew.id <> v_conta_id
+    ) then
+      raise exception 'Ja existe outra conta com esta empresa vinculada.';
+    end if;
+
+    update public.empresas_web
+    set
+      tipo_pessoa = v_tipo_pessoa,
+      nome = v_nome,
+      cpf = v_cpf,
+      cnpj = v_cnpj,
+      responsavel = v_responsavel,
+      telefone = v_telefone,
+      email = v_email,
+      cep = v_cep,
+      logradouro = v_logradouro,
+      numero_endereco = v_numero_endereco,
+      complemento = v_complemento,
+      bairro = v_bairro,
+      cidade = v_cidade,
+      uf = v_uf,
+      vinculado_nome = v_vinculado_nome,
+      vinculado_cpf = v_vinculado_cpf,
+      vinculado_cnpj = v_vinculado_cnpj,
+      updated_at = timezone('utc', now())
+    where id = v_conta_id
+    returning id into v_conta_id;
+
+    return v_conta_id;
+  end if;
+
+  update public.empresas_web
+  set
+    auth_user_id = v_auth_user_id,
+    tipo_pessoa = v_tipo_pessoa,
+    nome = v_nome,
+    cpf = v_cpf,
+    cnpj = v_cnpj,
+    responsavel = v_responsavel,
+    telefone = v_telefone,
+    email = v_email,
+    cep = v_cep,
+    logradouro = v_logradouro,
+    numero_endereco = v_numero_endereco,
+    complemento = v_complemento,
+    bairro = v_bairro,
+    cidade = v_cidade,
+    uf = v_uf,
+    vinculado_nome = v_vinculado_nome,
+    vinculado_cpf = v_vinculado_cpf,
+    vinculado_cnpj = v_vinculado_cnpj,
+    updated_at = timezone('utc', now())
+  where (
+      (v_tipo_pessoa = 'fisica' and cpf = v_cpf)
+      or (v_tipo_pessoa = 'juridica' and cnpj = v_cnpj)
+    )
+    and (auth_user_id is null or auth_user_id = v_auth_user_id)
+  returning id into v_conta_id;
+
+  if v_conta_id is not null then
+    return v_conta_id;
+  end if;
+
+  begin
+    insert into public.empresas_web (
+      auth_user_id,
+      tipo_pessoa,
+      nome,
+      cpf,
+      cnpj,
+      responsavel,
+      telefone,
+      email,
+      cep,
+      logradouro,
+      numero_endereco,
+      complemento,
+      bairro,
+      cidade,
+      uf,
+      vinculado_nome,
+      vinculado_cpf,
+      vinculado_cnpj
+    )
+    values (
+      v_auth_user_id,
+      v_tipo_pessoa,
+      v_nome,
+      v_cpf,
+      v_cnpj,
+      v_responsavel,
+      v_telefone,
+      v_email,
+      v_cep,
+      v_logradouro,
+      v_numero_endereco,
+      v_complemento,
+      v_bairro,
+      v_cidade,
+      v_uf,
+      v_vinculado_nome,
+      v_vinculado_cpf,
+      v_vinculado_cnpj
+    )
+    returning id into v_conta_id;
+  exception
+    when unique_violation then
+      if v_tipo_pessoa = 'fisica' then
+        raise exception 'Conta ja vinculada a outro usuario autenticado com este CPF.';
+      end if;
+
+      raise exception 'Conta ja vinculada a outro usuario autenticado com este CNPJ.';
+  end;
+
+  return v_conta_id;
+end;
+$$;
+
+revoke all on function public.salvar_conta_web(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text) from public;
+grant execute on function public.salvar_conta_web(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text) to authenticated, service_role;
+
 create or replace function public.salvar_empresa_web(
   p_nome text,
   p_cnpj text,
@@ -228,100 +593,16 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare
-  v_auth_user_id uuid;
-  v_nome text;
-  v_cnpj text;
-  v_responsavel text;
-  v_telefone text;
-  v_email text;
-  v_empresa_id uuid;
 begin
-  v_auth_user_id := auth.uid();
-  v_nome := trim(coalesce(p_nome, ''));
-  v_cnpj := trim(coalesce(p_cnpj, ''));
-  v_responsavel := trim(coalesce(p_responsavel, ''));
-  v_telefone := trim(coalesce(p_telefone, ''));
-  v_email := nullif(trim(coalesce(p_email, '')), '');
-
-  if v_auth_user_id is null then
-    raise exception 'Usuario nao autenticado.';
-  end if;
-
-  if v_nome = '' or v_cnpj = '' or v_responsavel = '' or v_telefone = '' then
-    raise exception 'Dados da empresa incompletos.';
-  end if;
-
-  select ew.id
-  into v_empresa_id
-  from public.empresas_web ew
-  where ew.auth_user_id = v_auth_user_id
-  limit 1;
-
-  if v_empresa_id is not null then
-    if exists (
-      select 1
-      from public.empresas_web ew
-      where ew.cnpj = v_cnpj
-        and ew.id <> v_empresa_id
-    ) then
-      raise exception 'Ja existe outra empresa com este CNPJ.';
-    end if;
-
-    update public.empresas_web
-    set
-      nome = v_nome,
-      cnpj = v_cnpj,
-      responsavel = v_responsavel,
-      telefone = v_telefone,
-      email = v_email,
-      updated_at = timezone('utc', now())
-    where id = v_empresa_id
-    returning id into v_empresa_id;
-
-    return v_empresa_id;
-  end if;
-
-  update public.empresas_web
-  set
-    auth_user_id = v_auth_user_id,
-    nome = v_nome,
-    responsavel = v_responsavel,
-    telefone = v_telefone,
-    email = v_email,
-    updated_at = timezone('utc', now())
-  where cnpj = v_cnpj
-    and (auth_user_id is null or auth_user_id = v_auth_user_id)
-  returning id into v_empresa_id;
-
-  if v_empresa_id is not null then
-    return v_empresa_id;
-  end if;
-
-  begin
-    insert into public.empresas_web (
-      auth_user_id,
-      nome,
-      cnpj,
-      responsavel,
-      telefone,
-      email
-    )
-    values (
-      v_auth_user_id,
-      v_nome,
-      v_cnpj,
-      v_responsavel,
-      v_telefone,
-      v_email
-    )
-    returning id into v_empresa_id;
-  exception
-    when unique_violation then
-      raise exception 'Empresa ja vinculada a outro usuario autenticado.';
-  end;
-
-  return v_empresa_id;
+  return public.salvar_conta_web(
+    'juridica',
+    p_nome,
+    null,
+    p_cnpj,
+    p_telefone,
+    p_email,
+    p_responsavel
+  );
 end;
 $$;
 
@@ -330,11 +611,12 @@ grant execute on function public.salvar_empresa_web(text, text, text, text, text
 
 create or replace function public.publicar_carga_web(
   p_status text,
-  p_empresa_nome text,
-  p_empresa_cnpj text,
-  p_empresa_responsavel text,
-  p_empresa_telefone text,
-  p_empresa_email text,
+  p_tipo_pessoa text,
+  p_nome text,
+  p_cpf text,
+  p_cnpj text,
+  p_telefone text,
+  p_email text,
   p_cidade_coleta text,
   p_uf_coleta text,
   p_data_coleta date,
@@ -358,10 +640,10 @@ security definer
 set search_path = public
 as $$
 declare
-  v_empresa_id uuid;
+  v_conta_id uuid;
   v_carga_id bigint;
-  v_empresa_nome text;
-  v_empresa_auth_user_id uuid;
+  v_nome_conta text;
+  v_conta_auth_user_id uuid;
   v_compatibilidade text;
 begin
   if auth.uid() is null then
@@ -380,25 +662,27 @@ begin
     raise exception 'Dados principais da carga incompletos.';
   end if;
 
-  v_empresa_id := public.salvar_empresa_web(
-    p_empresa_nome,
-    p_empresa_cnpj,
-    p_empresa_responsavel,
-    p_empresa_telefone,
-    p_empresa_email
+  v_conta_id := public.salvar_conta_web(
+    p_tipo_pessoa,
+    p_nome,
+    p_cpf,
+    p_cnpj,
+    p_telefone,
+    p_email,
+    null
   );
 
   select
     ew.nome,
     ew.auth_user_id
   into
-    v_empresa_nome,
-    v_empresa_auth_user_id
+    v_nome_conta,
+    v_conta_auth_user_id
   from public.empresas_web ew
-  where ew.id = v_empresa_id;
+  where ew.id = v_conta_id;
 
-  if v_empresa_auth_user_id is null then
-    raise exception 'Empresa nao encontrada para a conta autenticada.';
+  if v_conta_auth_user_id is null then
+    raise exception 'Conta nao encontrada para o usuario autenticado.';
   end if;
 
   v_compatibilidade := nullif(
@@ -436,8 +720,8 @@ begin
     compatibilidade_veiculo
   )
   values (
-    v_empresa_nome,
-    v_empresa_auth_user_id,
+    v_nome_conta,
+    v_conta_auth_user_id,
     case
       when p_status in ('publicada', 'rascunho', 'encerrada') then p_status
       else 'publicada'
@@ -467,21 +751,22 @@ end;
 $$;
 
 revoke all on function public.publicar_carga_web(
-  text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+  text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
 ) from public;
 
 grant execute on function public.publicar_carga_web(
-  text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+  text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
 ) to authenticated, service_role;
 
 create or replace function public.atualizar_carga_web(
   p_carga_id bigint,
   p_status text,
-  p_empresa_nome text,
-  p_empresa_cnpj text,
-  p_empresa_responsavel text,
-  p_empresa_telefone text,
-  p_empresa_email text,
+  p_tipo_pessoa text,
+  p_nome text,
+  p_cpf text,
+  p_cnpj text,
+  p_telefone text,
+  p_email text,
   p_cidade_coleta text,
   p_uf_coleta text,
   p_data_coleta date,
@@ -506,10 +791,10 @@ set search_path = public
 as $$
 declare
   v_auth_user_id uuid;
-  v_empresa_id uuid;
+  v_conta_id uuid;
   v_carga_id bigint;
   v_has_accepted_driver boolean;
-  v_empresa_nome text;
+  v_nome_conta text;
   v_compatibilidade text;
 begin
   v_auth_user_id := auth.uid();
@@ -534,22 +819,24 @@ begin
     raise exception 'Dados principais da carga incompletos.';
   end if;
 
-  v_empresa_id := public.salvar_empresa_web(
-    p_empresa_nome,
-    p_empresa_cnpj,
-    p_empresa_responsavel,
-    p_empresa_telefone,
-    p_empresa_email
+  v_conta_id := public.salvar_conta_web(
+    p_tipo_pessoa,
+    p_nome,
+    p_cpf,
+    p_cnpj,
+    p_telefone,
+    p_email,
+    null
   );
 
   select ew.nome
-  into v_empresa_nome
+  into v_nome_conta
   from public.empresas_web ew
-  where ew.id = v_empresa_id
+  where ew.id = v_conta_id
     and ew.auth_user_id = v_auth_user_id;
 
-  if v_empresa_nome is null then
-    raise exception 'Empresa nao encontrada para a conta autenticada.';
+  if v_nome_conta is null then
+    raise exception 'Conta nao encontrada para o usuario autenticado.';
   end if;
 
   select exists (
@@ -577,7 +864,7 @@ begin
 
   update public."Viagens"
   set
-    empresa = v_empresa_nome,
+    empresa = v_nome_conta,
     empresa_user_id = v_auth_user_id,
     status = p_status,
     origem_cidade = trim(p_cidade_coleta),
@@ -611,11 +898,11 @@ end;
 $$;
 
 revoke all on function public.atualizar_carga_web(
-  bigint, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+  bigint, text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
 ) from public;
 
 grant execute on function public.atualizar_carga_web(
-  bigint, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+  bigint, text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
 ) to authenticated, service_role;
 
 create or replace function public.minhas_cargas_web()
@@ -1464,8 +1751,8 @@ begin
     v.id,
     coalesce(v.status, 'publicada') as status,
     coalesce(nullif(trim(v.empresa), ''), e.nome, '') as empresa_nome,
-    e.cnpj as empresa_cnpj,
-    e.responsavel as empresa_responsavel,
+    coalesce(e.cnpj, e.cpf) as empresa_cnpj,
+    coalesce(nullif(trim(e.responsavel), ''), e.nome) as empresa_responsavel,
     e.telefone as empresa_telefone,
     e.email as empresa_email,
     coalesce(v.origem_cidade, '') as cidade_coleta,
@@ -1513,6 +1800,7 @@ begin
       or p_busca = ''
       or coalesce(v.empresa, e.nome, '') ilike '%' || p_busca || '%'
       or e.cnpj ilike '%' || p_busca || '%'
+      or e.cpf ilike '%' || p_busca || '%'
       or v.produto ilike '%' || p_busca || '%'
       or v.origem_cidade ilike '%' || p_busca || '%'
       or v.destino_cidade ilike '%' || p_busca || '%'
