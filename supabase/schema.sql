@@ -222,6 +222,47 @@ alter table public.candidaturas_web enable row level security;
 alter table public.web_admin_users enable row level security;
 alter table public.chat_messages_web enable row level security;
 
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_type
+    where typname = 'status_execucao_viagem'
+      and typnamespace = 'public'::regnamespace
+  ) then
+    create type public.status_execucao_viagem as enum (
+      'Aguardando retirada',
+      'Retirada informada',
+      'Em entrega',
+      'Entrega informada',
+      'Concluida',
+      'Cancelada'
+    );
+  end if;
+end;
+$$;
+
+alter table if exists public."Viagens"
+add column if not exists coleta_endereco text,
+add column if not exists coleta_latitude double precision,
+add column if not exists coleta_longitude double precision,
+add column if not exists coleta_place_id text,
+add column if not exists entrega_endereco text,
+add column if not exists entrega_latitude double precision,
+add column if not exists entrega_longitude double precision,
+add column if not exists entrega_place_id text;
+
+alter table if exists public.solicitacoes_viagem
+add column if not exists status_execucao public.status_execucao_viagem,
+add column if not exists coleta_informada_em timestamptz,
+add column if not exists coleta_confirmada_em timestamptz,
+add column if not exists entrega_informada_em timestamptz,
+add column if not exists entrega_confirmada_em timestamptz;
+
+drop function if exists public.salvar_conta_web(
+  text, text, text, text, text, text, text
+);
+
 drop policy if exists "service_role_manage_empresas_web" on public.empresas_web;
 create policy "service_role_manage_empresas_web"
 on public.empresas_web
@@ -609,6 +650,10 @@ $$;
 revoke all on function public.salvar_empresa_web(text, text, text, text, text) from public;
 grant execute on function public.salvar_empresa_web(text, text, text, text, text) to authenticated, service_role;
 
+drop function if exists public.publicar_carga_web(
+  text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+);
+
 create or replace function public.publicar_carga_web(
   p_status text,
   p_tipo_pessoa text,
@@ -620,9 +665,17 @@ create or replace function public.publicar_carga_web(
   p_cidade_coleta text,
   p_uf_coleta text,
   p_data_coleta date,
+  p_coleta_endereco text,
+  p_coleta_latitude double precision,
+  p_coleta_longitude double precision,
+  p_coleta_place_id text,
   p_cidade_entrega text,
   p_uf_entrega text,
   p_prazo_entrega date,
+  p_entrega_endereco text,
+  p_entrega_latitude double precision,
+  p_entrega_longitude double precision,
+  p_entrega_place_id text,
   p_produto text,
   p_peso_total text,
   p_valor_frete numeric,
@@ -704,9 +757,17 @@ begin
     origem_cidade,
     origem_uf,
     data_coleta,
+    coleta_endereco,
+    coleta_latitude,
+    coleta_longitude,
+    coleta_place_id,
     destino_cidade,
     destino_uf,
     data_limite_entrega,
+    entrega_endereco,
+    entrega_latitude,
+    entrega_longitude,
+    entrega_place_id,
     produto,
     peso_texto,
     valor,
@@ -729,9 +790,17 @@ begin
     trim(p_cidade_coleta),
     upper(trim(p_uf_coleta)),
     p_data_coleta,
+    nullif(trim(coalesce(p_coleta_endereco, '')), ''),
+    p_coleta_latitude,
+    p_coleta_longitude,
+    nullif(trim(coalesce(p_coleta_place_id, '')), ''),
     trim(p_cidade_entrega),
     upper(trim(p_uf_entrega)),
     p_prazo_entrega::timestamp,
+    nullif(trim(coalesce(p_entrega_endereco, '')), ''),
+    p_entrega_latitude,
+    p_entrega_longitude,
+    nullif(trim(coalesce(p_entrega_place_id, '')), ''),
     trim(p_produto),
     trim(p_peso_total),
     p_valor_frete,
@@ -751,12 +820,16 @@ end;
 $$;
 
 revoke all on function public.publicar_carga_web(
-  text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+  text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
 ) from public;
 
 grant execute on function public.publicar_carga_web(
-  text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+  text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
 ) to authenticated, service_role;
+
+drop function if exists public.atualizar_carga_web(
+  bigint, text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+);
 
 create or replace function public.atualizar_carga_web(
   p_carga_id bigint,
@@ -770,9 +843,17 @@ create or replace function public.atualizar_carga_web(
   p_cidade_coleta text,
   p_uf_coleta text,
   p_data_coleta date,
+  p_coleta_endereco text,
+  p_coleta_latitude double precision,
+  p_coleta_longitude double precision,
+  p_coleta_place_id text,
   p_cidade_entrega text,
   p_uf_entrega text,
   p_prazo_entrega date,
+  p_entrega_endereco text,
+  p_entrega_latitude double precision,
+  p_entrega_longitude double precision,
+  p_entrega_place_id text,
   p_produto text,
   p_peso_total text,
   p_valor_frete numeric,
@@ -870,9 +951,17 @@ begin
     origem_cidade = trim(p_cidade_coleta),
     origem_uf = upper(trim(p_uf_coleta)),
     data_coleta = p_data_coleta,
+    coleta_endereco = nullif(trim(coalesce(p_coleta_endereco, '')), ''),
+    coleta_latitude = p_coleta_latitude,
+    coleta_longitude = p_coleta_longitude,
+    coleta_place_id = nullif(trim(coalesce(p_coleta_place_id, '')), ''),
     destino_cidade = trim(p_cidade_entrega),
     destino_uf = upper(trim(p_uf_entrega)),
     data_limite_entrega = p_prazo_entrega::timestamp,
+    entrega_endereco = nullif(trim(coalesce(p_entrega_endereco, '')), ''),
+    entrega_latitude = p_entrega_latitude,
+    entrega_longitude = p_entrega_longitude,
+    entrega_place_id = nullif(trim(coalesce(p_entrega_place_id, '')), ''),
     produto = trim(p_produto),
     peso_texto = trim(p_peso_total),
     valor = p_valor_frete,
@@ -898,11 +987,11 @@ end;
 $$;
 
 revoke all on function public.atualizar_carga_web(
-  bigint, text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+  bigint, text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
 ) from public;
 
 grant execute on function public.atualizar_carga_web(
-  bigint, text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
+  bigint, text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
 ) to authenticated, service_role;
 
 create or replace function public.minhas_cargas_web()
@@ -913,9 +1002,17 @@ returns table (
   cidade_coleta text,
   uf_coleta char(2),
   data_coleta date,
+  coleta_endereco text,
+  coleta_latitude double precision,
+  coleta_longitude double precision,
+  coleta_place_id text,
   cidade_entrega text,
   uf_entrega char(2),
   prazo_entrega date,
+  entrega_endereco text,
+  entrega_latitude double precision,
+  entrega_longitude double precision,
+  entrega_place_id text,
   produto text,
   peso_total text,
   valor_frete numeric,
@@ -940,9 +1037,17 @@ as $$
     coalesce(v.origem_cidade, '') as cidade_coleta,
     coalesce(v.origem_uf, '')::char(2) as uf_coleta,
     v.data_coleta,
+    v.coleta_endereco,
+    v.coleta_latitude,
+    v.coleta_longitude,
+    v.coleta_place_id,
     coalesce(v.destino_cidade, '') as cidade_entrega,
     coalesce(v.destino_uf, '')::char(2) as uf_entrega,
     v.data_limite_entrega::date as prazo_entrega,
+    v.entrega_endereco,
+    v.entrega_latitude,
+    v.entrega_longitude,
+    v.entrega_place_id,
     coalesce(v.produto, '') as produto,
     coalesce(
       nullif(trim(v.peso_texto), ''),
@@ -1470,6 +1575,193 @@ $$;
 revoke all on function public.atualizar_status_candidatura_web(uuid, text) from public;
 grant execute on function public.atualizar_status_candidatura_web(uuid, text) to authenticated, service_role;
 
+alter table if exists public."Viagens"
+drop constraint if exists viagens_coleta_coords_valid;
+
+alter table if exists public."Viagens"
+add constraint viagens_coleta_coords_valid
+check (
+  (coleta_latitude is null and coleta_longitude is null)
+  or (
+    coleta_latitude is not null
+    and coleta_longitude is not null
+    and coleta_latitude between -90 and 90
+    and coleta_longitude between -180 and 180
+  )
+);
+
+alter table if exists public."Viagens"
+drop constraint if exists viagens_entrega_coords_valid;
+
+alter table if exists public."Viagens"
+add constraint viagens_entrega_coords_valid
+check (
+  (entrega_latitude is null and entrega_longitude is null)
+  or (
+    entrega_latitude is not null
+    and entrega_longitude is not null
+    and entrega_latitude between -90 and 90
+    and entrega_longitude between -180 and 180
+  )
+);
+
+update public.solicitacoes_viagem
+set status_execucao = 'Aguardando retirada'
+where status = 'Aceita'
+  and status_execucao is null;
+
+create or replace function public.sync_solicitacao_execucao_status()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.status = 'Aceita' and new.status_execucao is null then
+    new.status_execucao = 'Aguardando retirada';
+  end if;
+
+  if new.status <> 'Aceita' then
+    new.status_execucao = null;
+    new.coleta_informada_em = null;
+    new.coleta_confirmada_em = null;
+    new.entrega_informada_em = null;
+    new.entrega_confirmada_em = null;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_sync_solicitacao_execucao_status
+on public.solicitacoes_viagem;
+
+create trigger trg_sync_solicitacao_execucao_status
+before insert or update of status, status_execucao
+on public.solicitacoes_viagem
+for each row
+execute function public.sync_solicitacao_execucao_status();
+
+alter table public.solicitacoes_viagem
+drop constraint if exists solicitacoes_viagem_execucao_matches_status;
+
+alter table public.solicitacoes_viagem
+add constraint solicitacoes_viagem_execucao_matches_status
+check (
+  (
+    status = 'Aceita'
+    and status_execucao is not null
+  )
+  or (
+    status <> 'Aceita'
+    and status_execucao is null
+  )
+);
+
+create or replace function public.confirmar_coleta_empresa(
+  p_solicitacao_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_empresa uuid := auth.uid();
+  v_solicitacao public.solicitacoes_viagem%rowtype;
+begin
+  if v_empresa is null then
+    raise exception 'Usuario nao autenticado';
+  end if;
+
+  select s.*
+    into v_solicitacao
+  from public.solicitacoes_viagem as s
+  join public."Viagens" as v on v.id = s.viagem_id
+  where s.id = p_solicitacao_id
+    and v.empresa_user_id = v_empresa
+  for update of s;
+
+  if not found then
+    raise exception 'Solicitacao nao encontrada para esta empresa';
+  end if;
+
+  if v_solicitacao.status <> 'Aceita' then
+    raise exception 'Solicitacao ainda nao foi aceita';
+  end if;
+
+  if v_solicitacao.status_execucao = 'Retirada informada' then
+    update public.solicitacoes_viagem
+    set status_execucao = 'Em entrega',
+        coleta_confirmada_em = coalesce(coleta_confirmada_em, now())
+    where id = p_solicitacao_id
+    returning *
+      into v_solicitacao;
+  elsif v_solicitacao.status_execucao <> 'Em entrega' then
+    raise exception 'A coleta nao pode ser confirmada nesta etapa';
+  end if;
+
+  return jsonb_build_object(
+    'solicitacao_id', v_solicitacao.id,
+    'status_execucao', v_solicitacao.status_execucao::text,
+    'coleta_confirmada_em', v_solicitacao.coleta_confirmada_em
+  );
+end;
+$$;
+
+create or replace function public.confirmar_entrega_empresa(
+  p_solicitacao_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_empresa uuid := auth.uid();
+  v_solicitacao public.solicitacoes_viagem%rowtype;
+begin
+  if v_empresa is null then
+    raise exception 'Usuario nao autenticado';
+  end if;
+
+  select s.*
+    into v_solicitacao
+  from public.solicitacoes_viagem as s
+  join public."Viagens" as v on v.id = s.viagem_id
+  where s.id = p_solicitacao_id
+    and v.empresa_user_id = v_empresa
+  for update of s;
+
+  if not found then
+    raise exception 'Solicitacao nao encontrada para esta empresa';
+  end if;
+
+  if v_solicitacao.status <> 'Aceita' then
+    raise exception 'Solicitacao ainda nao foi aceita';
+  end if;
+
+  if v_solicitacao.status_execucao = 'Entrega informada' then
+    update public.solicitacoes_viagem
+    set status_execucao = 'Concluida',
+        entrega_confirmada_em = coalesce(entrega_confirmada_em, now())
+    where id = p_solicitacao_id
+    returning *
+      into v_solicitacao;
+  elsif v_solicitacao.status_execucao <> 'Concluida' then
+    raise exception 'A entrega nao pode ser confirmada nesta etapa';
+  end if;
+
+  return jsonb_build_object(
+    'solicitacao_id', v_solicitacao.id,
+    'status_execucao', v_solicitacao.status_execucao::text,
+    'entrega_confirmada_em', v_solicitacao.entrega_confirmada_em
+  );
+end;
+$$;
+
+grant usage on type public.status_execucao_viagem to authenticated, service_role;
+grant execute on function public.confirmar_coleta_empresa(uuid) to authenticated, service_role;
+grant execute on function public.confirmar_entrega_empresa(uuid) to authenticated, service_role;
+
 create or replace function public.empresa_listar_conversas_chat_web()
 returns table (
   candidatura_id uuid,
@@ -1721,9 +2013,17 @@ returns table (
   cidade_coleta text,
   uf_coleta char(2),
   data_coleta date,
+  coleta_endereco text,
+  coleta_latitude double precision,
+  coleta_longitude double precision,
+  coleta_place_id text,
   cidade_entrega text,
   uf_entrega char(2),
   prazo_entrega date,
+  entrega_endereco text,
+  entrega_latitude double precision,
+  entrega_longitude double precision,
+  entrega_place_id text,
   produto text,
   peso_total text,
   valor_frete numeric,
@@ -1758,9 +2058,17 @@ begin
     coalesce(v.origem_cidade, '') as cidade_coleta,
     coalesce(v.origem_uf, '')::char(2) as uf_coleta,
     v.data_coleta,
+    v.coleta_endereco,
+    v.coleta_latitude,
+    v.coleta_longitude,
+    v.coleta_place_id,
     coalesce(v.destino_cidade, '') as cidade_entrega,
     coalesce(v.destino_uf, '')::char(2) as uf_entrega,
     v.data_limite_entrega::date as prazo_entrega,
+    v.entrega_endereco,
+    v.entrega_latitude,
+    v.entrega_longitude,
+    v.entrega_place_id,
     coalesce(v.produto, '') as produto,
     coalesce(
       nullif(trim(v.peso_texto), ''),

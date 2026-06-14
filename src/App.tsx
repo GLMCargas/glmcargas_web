@@ -1,6 +1,26 @@
-import { ChangeEvent, FormEvent, MouseEvent, useEffect, useState } from 'react';
+import {
+  ChangeEvent,
+  FormEvent,
+  MouseEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
+
+declare global {
+  interface Window {
+    mapboxgl?: any;
+    __glmMapboxPromise?: Promise<any>;
+  }
+}
+
+const mapboxAccessToken =
+  import.meta.env.VITE_MAPBOX_ACCESS_TOKEN ??
+  import.meta.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
+
+const mapboxGlVersion = '2.15.0';
 
 const benefitCards = [
   {
@@ -77,9 +97,17 @@ const initialForm = {
   pickupCity: '',
   pickupState: '',
   pickupDate: '',
+  pickupAddress: '',
+  pickupLatitude: '',
+  pickupLongitude: '',
+  pickupPlaceId: '',
   deliveryCity: '',
   deliveryState: '',
   deliveryDate: '',
+  deliveryAddress: '',
+  deliveryLatitude: '',
+  deliveryLongitude: '',
+  deliveryPlaceId: '',
   cargoType: '',
   cargoWeight: '',
   freightValue: '',
@@ -136,6 +164,13 @@ type CargoStatus = 'publicada' | 'rascunho' | 'encerrada';
 type ActiveSection = 'cargas' | 'nova-carga' | 'chat' | 'perfil';
 type AdminFilters = typeof initialAdminFilters;
 type TripRequestStatus = 'Aguardando' | 'Aceita' | 'Recusada';
+type TripExecutionStatus =
+  | 'Aguardando retirada'
+  | 'Retirada informada'
+  | 'Em entrega'
+  | 'Entrega informada'
+  | 'Concluida'
+  | 'Cancelada';
 
 type CompanyCargo = {
   id: number;
@@ -144,9 +179,17 @@ type CompanyCargo = {
   cidade_coleta: string;
   uf_coleta: string;
   data_coleta: string | null;
+  coleta_endereco: string | null;
+  coleta_latitude: number | null;
+  coleta_longitude: number | null;
+  coleta_place_id: string | null;
   cidade_entrega: string;
   uf_entrega: string;
   prazo_entrega: string | null;
+  entrega_endereco: string | null;
+  entrega_latitude: number | null;
+  entrega_longitude: number | null;
+  entrega_place_id: string | null;
   produto: string;
   peso_total: string;
   valor_frete: number | null;
@@ -162,6 +205,8 @@ type CompanyCargo = {
   hasAcceptedDriver?: boolean;
   chosenDriverName?: string | null;
   chosenTripId?: number | null;
+  chosenRequestId?: string | null;
+  chosenExecutionStatus?: TripExecutionStatus | null;
 };
 
 type AccountProfileRow = {
@@ -190,6 +235,14 @@ type ChatTripRow = {
   origem_uf: string | null;
   destino_cidade: string | null;
   destino_uf: string | null;
+  coleta_endereco?: string | null;
+  coleta_latitude?: number | null;
+  coleta_longitude?: number | null;
+  coleta_place_id?: string | null;
+  entrega_endereco?: string | null;
+  entrega_latitude?: number | null;
+  entrega_longitude?: number | null;
+  entrega_place_id?: string | null;
   data_limite_entrega?: string | null;
   valor?: number | null;
 };
@@ -202,8 +255,14 @@ type ChatRoomRow = {
 };
 
 type ChatRequestRow = {
+  id: string;
   room_id: string;
   status: TripRequestStatus;
+  status_execucao: TripExecutionStatus | null;
+  coleta_informada_em: string | null;
+  coleta_confirmada_em: string | null;
+  entrega_informada_em: string | null;
+  entrega_confirmada_em: string | null;
   created_at: string;
   responded_at: string | null;
   mensagem_inicial: string | null;
@@ -227,12 +286,18 @@ type ChatMessage = {
 
 type ChatRoomSummary = {
   id: string;
+  requestId: string | null;
   viagemId: number;
   createdAt: string;
   companyName: string;
   driverName: string;
   routeLabel: string;
   status: TripRequestStatus;
+  statusExecucao: TripExecutionStatus | null;
+  coletaInformadaEm: string | null;
+  coletaConfirmadaEm: string | null;
+  entregaInformadaEm: string | null;
+  entregaConfirmadaEm: string | null;
   respondedAt: string | null;
   initialMessage: string | null;
   lastMessagePreview: string;
@@ -248,6 +313,8 @@ type CargoNegotiationMatch = {
   cidadeEntrega: string;
   ufEntrega: string;
   status: TripRequestStatus;
+  requestId: string;
+  statusExecucao: TripExecutionStatus | null;
   respondedAt: string | null;
   createdAt: string;
   driverName: string;
@@ -269,6 +336,30 @@ type PostalCodeLookupResponse = {
 };
 
 type CityField = 'pickupCity' | 'deliveryCity' | 'profileCity';
+type MapPickerTarget = 'pickup' | 'delivery';
+
+type MapSelection = {
+  address: string;
+  latitude: number | null;
+  longitude: number | null;
+  placeId: string | null;
+  city: string;
+  state: string;
+};
+
+type MapboxFeature = {
+  id?: string;
+  place_name?: string;
+  text?: string;
+  center?: [number, number];
+  place_type?: string[];
+  context?: Array<{
+    id?: string;
+    text?: string;
+    short_code?: string;
+  }>;
+  properties?: Record<string, unknown>;
+};
 
 function parseCurrencyToNumber(value: string) {
   const normalized = value
@@ -277,6 +368,204 @@ function parseCurrencyToNumber(value: string) {
     .replace(',', '.');
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseCoordinateToNumber(value: string) {
+  const normalized = value.trim().replace(',', '.');
+  if (!normalized) return null;
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatCoordinateInput(value: number | string | null) {
+  if (value === null || value === undefined || value === '') return '';
+  return String(value).replace('.', ',');
+}
+
+function buildNavigationAddress(address: string, city: string, state: string) {
+  const trimmedAddress = address.trim();
+  if (trimmedAddress) return trimmedAddress;
+
+  return [city.trim(), state.trim().toUpperCase(), 'Brasil']
+    .filter(Boolean)
+    .join(', ');
+}
+
+function loadMapboxGl() {
+  if (window.mapboxgl) {
+    return Promise.resolve(window.mapboxgl);
+  }
+
+  if (!mapboxAccessToken) {
+    return Promise.reject(
+      new Error('Configure VITE_MAPBOX_ACCESS_TOKEN para usar o seletor no mapa.'),
+    );
+  }
+
+  if (window.__glmMapboxPromise) {
+    return window.__glmMapboxPromise;
+  }
+
+  window.__glmMapboxPromise = new Promise((resolve, reject) => {
+    const existingCss = document.querySelector(
+      `link[href*="mapbox-gl-js/v${mapboxGlVersion}/mapbox-gl.css"]`,
+    );
+
+    if (!existingCss) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = `https://api.mapbox.com/mapbox-gl-js/v${mapboxGlVersion}/mapbox-gl.css`;
+      document.head.appendChild(link);
+    }
+
+    const script = document.createElement('script');
+    script.src = `https://api.mapbox.com/mapbox-gl-js/v${mapboxGlVersion}/mapbox-gl.js`;
+    script.async = true;
+    script.onload = () => resolve(window.mapboxgl);
+    script.onerror = () =>
+      reject(new Error('Não foi possível carregar o Mapbox.'));
+
+    document.head.appendChild(script);
+  });
+
+  return window.__glmMapboxPromise;
+}
+
+function getMapboxContextText(feature: MapboxFeature, prefix: string) {
+  return feature.context?.find((item) => item.id?.startsWith(prefix))?.text ?? '';
+}
+
+function getMapboxState(feature: MapboxFeature) {
+  const region = feature.context?.find((item) => item.id?.startsWith('region'));
+  const shortCode = region?.short_code?.split('-').pop();
+  return (shortCode || region?.text || '').toUpperCase();
+}
+
+function selectionFromMapboxFeature(feature: MapboxFeature): MapSelection | null {
+  if (!feature.center || feature.center.length < 2) {
+    return null;
+  }
+
+  const [longitude, latitude] = feature.center;
+  const city =
+    feature.place_type?.includes('place') || feature.place_type?.includes('locality')
+      ? feature.text || ''
+      : getMapboxContextText(feature, 'place') ||
+        getMapboxContextText(feature, 'locality') ||
+        getMapboxContextText(feature, 'district');
+
+  return {
+    address: feature.place_name || feature.text || '',
+    latitude,
+    longitude,
+    placeId: feature.id ?? null,
+    city,
+    state: getMapboxState(feature),
+  };
+}
+
+async function fetchMapboxFeatures(query: string) {
+  if (!mapboxAccessToken) {
+    throw new Error('Configure VITE_MAPBOX_ACCESS_TOKEN para usar o seletor no mapa.');
+  }
+
+  const params = new URLSearchParams({
+    access_token: mapboxAccessToken,
+    autocomplete: 'true',
+    country: 'br',
+    language: 'pt-BR',
+    limit: '5',
+    types: 'address,poi,place,locality,neighborhood',
+  });
+  const response = await fetch(
+    `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?${params.toString()}`,
+  );
+
+  if (!response.ok) {
+    throw new Error('Não foi possível buscar esse endereço no Mapbox.');
+  }
+
+  const data = (await response.json()) as { features?: MapboxFeature[] };
+  return data.features ?? [];
+}
+
+async function reverseMapboxGeocode(longitude: number, latitude: number) {
+  if (!mapboxAccessToken) {
+    throw new Error('Configure VITE_MAPBOX_ACCESS_TOKEN para usar o seletor no mapa.');
+  }
+
+  const params = new URLSearchParams({
+    access_token: mapboxAccessToken,
+    language: 'pt-BR',
+    limit: '1',
+    types: 'address,poi,place,locality,neighborhood',
+  });
+  const response = await fetch(
+    `https://api.mapbox.com/geocoding/v5/mapbox.places/${longitude},${latitude}.json?${params.toString()}`,
+  );
+
+  if (!response.ok) {
+    throw new Error('Não foi possível identificar esse ponto no Mapbox.');
+  }
+
+  const data = (await response.json()) as { features?: MapboxFeature[] };
+  return data.features?.[0] ?? null;
+}
+
+function mapsUrlForNavigationPoint(point: {
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  placeId: string | null;
+}) {
+  const hasCoordinates = point.latitude !== null && point.longitude !== null;
+  const destination = hasCoordinates
+    ? `${point.latitude},${point.longitude}`
+    : point.address?.trim();
+
+  if (!destination) return null;
+
+  const params = new URLSearchParams({
+    api: '1',
+    destination,
+    travelmode: 'driving',
+  });
+
+  if (point.placeId?.trim() && point.address?.trim()) {
+    params.set('destination', point.address.trim());
+    params.set('destination_place_id', point.placeId.trim());
+  }
+
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+function executionStatusLabel(status: TripExecutionStatus | null) {
+  if (!status) return 'Aguardando aceite';
+  if (status === 'Concluida') return 'Concluída';
+  return status;
+}
+
+function executionStatusDescription(room: ChatRoomSummary) {
+  if (room.status !== 'Aceita') {
+    return 'A navegação do motorista começa depois que a solicitação é aceita.';
+  }
+
+  switch (room.statusExecucao) {
+    case 'Aguardando retirada':
+    case null:
+      return 'Motorista liberado para seguir até o local de coleta.';
+    case 'Retirada informada':
+      return 'O motorista informou a coleta. Confirme para liberar a rota de entrega.';
+    case 'Em entrega':
+      return 'Coleta confirmada. O motorista está liberado para seguir até a entrega.';
+    case 'Entrega informada':
+      return 'O motorista informou a entrega. Confirme para concluir a viagem.';
+    case 'Concluida':
+      return 'Entrega confirmada e viagem concluída.';
+    case 'Cancelada':
+      return 'Esta execução foi cancelada.';
+  }
 }
 
 function formatCurrencyInput(value: string) {
@@ -509,9 +798,17 @@ function mapCargoToFormState(cargo: CompanyCargo): FormState {
     pickupCity: cargo.cidade_coleta,
     pickupState: cargo.uf_coleta,
     pickupDate: cargo.data_coleta ?? '',
+    pickupAddress: cargo.coleta_endereco ?? '',
+    pickupLatitude: formatCoordinateInput(cargo.coleta_latitude),
+    pickupLongitude: formatCoordinateInput(cargo.coleta_longitude),
+    pickupPlaceId: cargo.coleta_place_id ?? '',
     deliveryCity: cargo.cidade_entrega,
     deliveryState: cargo.uf_entrega,
     deliveryDate: cargo.prazo_entrega ?? '',
+    deliveryAddress: cargo.entrega_endereco ?? '',
+    deliveryLatitude: formatCoordinateInput(cargo.entrega_latitude),
+    deliveryLongitude: formatCoordinateInput(cargo.entrega_longitude),
+    deliveryPlaceId: cargo.entrega_place_id ?? '',
     cargoType: cargo.produto,
     cargoWeight: cargo.peso_total,
     freightValue: cargo.valor_frete_texto?.trim()
@@ -854,6 +1151,8 @@ function App() {
   const [chatDraft, setChatDraft] = useState('');
   const [isSendingChatMessage, setIsSendingChatMessage] = useState(false);
   const [isUpdatingChatStatus, setIsUpdatingChatStatus] = useState(false);
+  const [isUpdatingExecutionStatus, setIsUpdatingExecutionStatus] =
+    useState(false);
   const [cityOptions, setCityOptions] = useState<CityOption[]>([]);
   const [isLoadingCities, setIsLoadingCities] = useState(false);
   const [citiesError, setCitiesError] = useState('');
@@ -864,6 +1163,15 @@ function App() {
   );
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [activeSection, setActiveSection] = useState<ActiveSection>('cargas');
+  const [mapPickerTarget, setMapPickerTarget] =
+    useState<MapPickerTarget | null>(null);
+  const [mapPickerError, setMapPickerError] = useState('');
+  const [mapPickerQuery, setMapPickerQuery] = useState('');
+  const [mapPickerResults, setMapPickerResults] = useState<MapboxFeature[]>([]);
+  const [isSearchingMap, setIsSearchingMap] = useState(false);
+  const mapPickerElementRef = useRef<HTMLDivElement | null>(null);
+  const mapboxMapRef = useRef<any>(null);
+  const mapboxMarkerRef = useRef<any>(null);
 
   const persistAccountProfile = async (
     profile: AccountProfileState,
@@ -1051,6 +1359,8 @@ function App() {
         hasAcceptedDriver: false,
         chosenDriverName: null,
         chosenTripId: null,
+        chosenRequestId: null,
+        chosenExecutionStatus: null,
       }));
 
       let negotiations: CargoNegotiationMatch[] = [];
@@ -1072,9 +1382,9 @@ function App() {
 
         if (roomIds.length > 0) {
           const { data: requestData, error: requestError } = await supabase
-            .from('solicitacoes_viagem')
-            .select(
-              'room_id, status, created_at, responded_at, mensagem_inicial',
+          .from('solicitacoes_viagem')
+          .select(
+              'id, room_id, status, status_execucao, coleta_informada_em, coleta_confirmada_em, entrega_informada_em, entrega_confirmada_em, created_at, responded_at, mensagem_inicial',
             )
             .in('room_id', roomIds);
 
@@ -1118,7 +1428,9 @@ function App() {
                 ufColeta,
                 cidadeEntrega,
                 ufEntrega,
+                requestId: request.id,
                 status: request.status,
+                statusExecucao: request.status_execucao,
                 respondedAt: request.responded_at,
                 createdAt: request.created_at,
                 driverName: getDriverNameFromMessage(request.mensagem_inicial),
@@ -1148,6 +1460,8 @@ function App() {
             hasAcceptedDriver: true,
             chosenDriverName: acceptedNegotiation.driverName,
             chosenTripId: acceptedNegotiation.viagemId,
+            chosenRequestId: acceptedNegotiation.requestId,
+            chosenExecutionStatus: acceptedNegotiation.statusExecucao,
           };
         }),
       );
@@ -1200,7 +1514,7 @@ function App() {
       const { data: roomData, error: roomError } = await supabase
         .from('chat_rooms')
         .select(
-          'id, created_at, viagem_id, Viagens:viagem_id(empresa, origem_cidade, origem_uf, destino_cidade, destino_uf)',
+          'id, created_at, viagem_id, Viagens:viagem_id(empresa, origem_cidade, origem_uf, destino_cidade, destino_uf, coleta_endereco, coleta_latitude, coleta_longitude, coleta_place_id, entrega_endereco, entrega_latitude, entrega_longitude, entrega_place_id)',
         )
         .order('created_at', { ascending: false });
 
@@ -1221,7 +1535,7 @@ function App() {
           supabase
             .from('solicitacoes_viagem')
             .select(
-              'room_id, status, created_at, responded_at, mensagem_inicial',
+              'id, room_id, status, status_execucao, coleta_informada_em, coleta_confirmada_em, entrega_informada_em, entrega_confirmada_em, created_at, responded_at, mensagem_inicial',
             )
             .in('room_id', roomIds),
           supabase
@@ -1262,6 +1576,7 @@ function App() {
 
           return {
             id: room.id,
+            requestId: request?.id ?? null,
             viagemId: room.viagem_id,
             createdAt: room.created_at,
             companyName: trip?.empresa?.trim() || 'GLM Cargas',
@@ -1270,6 +1585,11 @@ function App() {
             ),
             routeLabel: formatRouteLabel(trip, room.viagem_id),
             status: request?.status ?? 'Aguardando',
+            statusExecucao: request?.status_execucao ?? null,
+            coletaInformadaEm: request?.coleta_informada_em ?? null,
+            coletaConfirmadaEm: request?.coleta_confirmada_em ?? null,
+            entregaInformadaEm: request?.entrega_informada_em ?? null,
+            entregaConfirmadaEm: request?.entrega_confirmada_em ?? null,
             respondedAt: request?.responded_at ?? null,
             initialMessage: request?.mensagem_inicial ?? null,
             lastMessagePreview:
@@ -1680,6 +2000,147 @@ function App() {
     };
   }, [session, activeSection, activeChatRoomId, chatRooms]);
 
+  useEffect(() => {
+    if (!mapPickerTarget) {
+      return;
+    }
+
+    let isCancelled = false;
+    const target = mapPickerTarget;
+
+    const initMapPicker = async () => {
+      try {
+        setMapPickerError('');
+        const mapboxgl = await loadMapboxGl();
+
+        if (
+          isCancelled ||
+          !mapboxgl ||
+          !mapPickerElementRef.current
+        ) {
+          return;
+        }
+
+        mapboxgl.accessToken = mapboxAccessToken;
+
+        const currentLatitude =
+          target === 'pickup'
+            ? parseCoordinateToNumber(form.pickupLatitude)
+            : parseCoordinateToNumber(form.deliveryLatitude);
+        const currentLongitude =
+          target === 'pickup'
+            ? parseCoordinateToNumber(form.pickupLongitude)
+            : parseCoordinateToNumber(form.deliveryLongitude);
+        const hasCurrentPoint =
+          currentLatitude !== null && currentLongitude !== null;
+        const initialCenter = hasCurrentPoint
+          ? [currentLongitude, currentLatitude]
+          : [-51.92528, -14.235004];
+        const map = new mapboxgl.Map({
+          container: mapPickerElementRef.current,
+          style: 'mapbox://styles/mapbox/streets-v12',
+          center: initialCenter,
+          zoom: hasCurrentPoint ? 14 : 3.5,
+        });
+        const marker = new mapboxgl.Marker({
+          color: '#e16f12',
+          draggable: true,
+        });
+
+        map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+        mapboxMapRef.current = map;
+        mapboxMarkerRef.current = marker;
+
+        if (hasCurrentPoint) {
+          marker.setLngLat(initialCenter).addTo(map);
+        }
+
+        marker.on('dragend', async () => {
+          const lngLat = marker.getLngLat();
+
+          try {
+            const feature = await reverseMapboxGeocode(lngLat.lng, lngLat.lat);
+            const selection = feature
+              ? selectionFromMapboxFeature(feature)
+              : null;
+
+            applyMapSelection(target, {
+              address:
+                selection?.address ??
+                `${lngLat.lat.toFixed(6)}, ${lngLat.lng.toFixed(6)}`,
+              latitude: lngLat.lat,
+              longitude: lngLat.lng,
+              placeId: selection?.placeId ?? null,
+              city: selection?.city ?? '',
+              state: selection?.state ?? '',
+            });
+          } catch {
+            applyMapSelection(target, {
+              address: `${lngLat.lat.toFixed(6)}, ${lngLat.lng.toFixed(6)}`,
+              latitude: lngLat.lat,
+              longitude: lngLat.lng,
+              placeId: null,
+              city: '',
+              state: '',
+            });
+          }
+        });
+
+        map.on('click', async (event: any) => {
+          const { lng, lat } = event.lngLat;
+          marker.setLngLat([lng, lat]).addTo(map);
+
+          try {
+            const feature = await reverseMapboxGeocode(lng, lat);
+            const selection = feature
+              ? selectionFromMapboxFeature(feature)
+              : null;
+
+            applyMapSelection(target, {
+              address:
+                selection?.address ?? `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+              latitude: lat,
+              longitude: lng,
+              placeId: selection?.placeId ?? null,
+              city: selection?.city ?? '',
+              state: selection?.state ?? '',
+            });
+            setMapPickerQuery(
+              selection?.address ?? `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+            );
+          } catch {
+            applyMapSelection(target, {
+              address: `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+              latitude: lat,
+              longitude: lng,
+              placeId: null,
+              city: '',
+              state: '',
+            });
+            setMapPickerQuery(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+          }
+        });
+      } catch (error) {
+        if (!isCancelled) {
+          setMapPickerError(
+            error instanceof Error
+              ? error.message
+              : 'Não foi possível abrir o mapa.',
+          );
+        }
+      }
+    };
+
+    void initMapPicker();
+
+    return () => {
+      isCancelled = true;
+      mapboxMapRef.current?.remove();
+      mapboxMapRef.current = null;
+      mapboxMarkerRef.current = null;
+    };
+  }, [mapPickerTarget]);
+
   const handleFieldChange =
     (field: keyof FormState) =>
     (
@@ -1970,6 +2431,104 @@ function App() {
     setActiveSection('nova-carga');
   };
 
+  const applyMapSelection = (
+    target: MapPickerTarget,
+    selection: MapSelection,
+  ) => {
+    const latitude =
+      selection.latitude === null ? '' : selection.latitude.toFixed(6);
+    const longitude =
+      selection.longitude === null ? '' : selection.longitude.toFixed(6);
+
+    setForm((current) => {
+      if (target === 'pickup') {
+        return {
+          ...current,
+          pickupAddress: selection.address,
+          pickupLatitude: latitude,
+          pickupLongitude: longitude,
+          pickupPlaceId: selection.placeId ?? '',
+          pickupCity: selection.city || current.pickupCity,
+          pickupState: selection.state || current.pickupState,
+        };
+      }
+
+      return {
+        ...current,
+        deliveryAddress: selection.address,
+        deliveryLatitude: latitude,
+        deliveryLongitude: longitude,
+        deliveryPlaceId: selection.placeId ?? '',
+        deliveryCity: selection.city || current.deliveryCity,
+        deliveryState: selection.state || current.deliveryState,
+      };
+    });
+
+    if (
+      selection.latitude !== null &&
+      selection.longitude !== null &&
+      mapboxMapRef.current &&
+      mapboxMarkerRef.current
+    ) {
+      const lngLat = [selection.longitude, selection.latitude];
+      mapboxMarkerRef.current.setLngLat(lngLat).addTo(mapboxMapRef.current);
+      mapboxMapRef.current.flyTo({ center: lngLat, zoom: 15 });
+    }
+  };
+
+  const openMapPicker = (target: MapPickerTarget) => {
+    setMapPickerError('');
+    setMapPickerResults([]);
+    setMapPickerQuery(
+      target === 'pickup'
+        ? buildNavigationAddress(form.pickupAddress, form.pickupCity, form.pickupState)
+        : buildNavigationAddress(
+            form.deliveryAddress,
+            form.deliveryCity,
+            form.deliveryState,
+          ),
+    );
+    setMapPickerTarget(target);
+  };
+
+  const handleMapSearch = async () => {
+    if (!mapPickerQuery.trim()) {
+      setMapPickerResults([]);
+      return;
+    }
+
+    setIsSearchingMap(true);
+    setMapPickerError('');
+
+    try {
+      setMapPickerResults(await fetchMapboxFeatures(mapPickerQuery.trim()));
+    } catch (error) {
+      setMapPickerError(
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível buscar esse endereço.',
+      );
+    } finally {
+      setIsSearchingMap(false);
+    }
+  };
+
+  const handleMapResultSelect = (feature: MapboxFeature) => {
+    if (!mapPickerTarget) return;
+
+    const selection = selectionFromMapboxFeature(feature);
+
+    if (!selection) {
+      setMapPickerError('Selecione um resultado com localização válida.');
+      return;
+    }
+
+    setMapPickerError('');
+    setMapPickerQuery(selection.address);
+    setMapPickerResults([]);
+    applyMapSelection(mapPickerTarget, selection);
+  };
+
   const submitCargo = async (mode: SubmitMode) => {
     setIsSubmitting(true);
     setSubmitMessage('');
@@ -1984,6 +2543,31 @@ function App() {
       return;
     }
 
+    const pickupLatitude = parseCoordinateToNumber(form.pickupLatitude);
+    const pickupLongitude = parseCoordinateToNumber(form.pickupLongitude);
+    const deliveryLatitude = parseCoordinateToNumber(form.deliveryLatitude);
+    const deliveryLongitude = parseCoordinateToNumber(form.deliveryLongitude);
+
+    if (
+      (form.pickupLatitude.trim() && pickupLatitude === null) ||
+      (form.pickupLongitude.trim() && pickupLongitude === null) ||
+      (form.deliveryLatitude.trim() && deliveryLatitude === null) ||
+      (form.deliveryLongitude.trim() && deliveryLongitude === null)
+    ) {
+      setIsSubmitting(false);
+      setSubmitError('Revise latitude e longitude. Use números como -23,550520.');
+      return;
+    }
+
+    if (
+      (pickupLatitude === null) !== (pickupLongitude === null) ||
+      (deliveryLatitude === null) !== (deliveryLongitude === null)
+    ) {
+      setIsSubmitting(false);
+      setSubmitError('Informe latitude e longitude juntas, ou deixe ambas vazias.');
+      return;
+    }
+
     const payload = {
       p_status: mode,
       p_tipo_pessoa: accountProfile.personType,
@@ -1995,9 +2579,25 @@ function App() {
       p_cidade_coleta: form.pickupCity.trim(),
       p_uf_coleta: form.pickupState.trim(),
       p_data_coleta: form.pickupDate || null,
+      p_coleta_endereco: buildNavigationAddress(
+        form.pickupAddress,
+        form.pickupCity,
+        form.pickupState,
+      ),
+      p_coleta_latitude: pickupLatitude,
+      p_coleta_longitude: pickupLongitude,
+      p_coleta_place_id: form.pickupPlaceId.trim() || null,
       p_cidade_entrega: form.deliveryCity.trim(),
       p_uf_entrega: form.deliveryState.trim(),
       p_prazo_entrega: form.deliveryDate || null,
+      p_entrega_endereco: buildNavigationAddress(
+        form.deliveryAddress,
+        form.deliveryCity,
+        form.deliveryState,
+      ),
+      p_entrega_latitude: deliveryLatitude,
+      p_entrega_longitude: deliveryLongitude,
+      p_entrega_place_id: form.deliveryPlaceId.trim() || null,
       p_produto: form.cargoType.trim(),
       p_peso_total: form.cargoWeight.trim(),
       p_valor_frete: parseCurrencyToNumber(form.freightValue),
@@ -2209,7 +2809,9 @@ function App() {
         .from('solicitacoes_viagem')
         .update({ status: nextStatus })
         .eq('room_id', activeChatRoomId)
-        .select('status, responded_at')
+        .select(
+          'id, status, status_execucao, coleta_informada_em, coleta_confirmada_em, entrega_informada_em, entrega_confirmada_em, responded_at',
+        )
         .single();
 
       if (error) {
@@ -2227,7 +2829,25 @@ function App() {
           room.id === activeChatRoomId
             ? {
                 ...room,
+                requestId: data.id,
                 status,
+                statusExecucao: data.status_execucao as TripExecutionStatus | null,
+                coletaInformadaEm:
+                  typeof data.coleta_informada_em === 'string'
+                    ? data.coleta_informada_em
+                    : null,
+                coletaConfirmadaEm:
+                  typeof data.coleta_confirmada_em === 'string'
+                    ? data.coleta_confirmada_em
+                    : null,
+                entregaInformadaEm:
+                  typeof data.entrega_informada_em === 'string'
+                    ? data.entrega_informada_em
+                    : null,
+                entregaConfirmadaEm:
+                  typeof data.entrega_confirmada_em === 'string'
+                    ? data.entrega_confirmada_em
+                    : null,
                 respondedAt,
               }
             : room,
@@ -2291,6 +2911,108 @@ function App() {
       );
     } finally {
       setIsUpdatingChatStatus(false);
+    }
+  };
+
+  const handleConfirmExecutionStep = async (
+    room: ChatRoomSummary,
+    step: 'coleta' | 'entrega',
+  ) => {
+    if (!session || !room.requestId || isUpdatingExecutionStatus) {
+      return;
+    }
+
+    setIsUpdatingExecutionStatus(true);
+    setChatMessagesError('');
+
+    const rpcName =
+      step === 'coleta'
+        ? 'confirmar_coleta_empresa'
+        : 'confirmar_entrega_empresa';
+    const statusMessage =
+      step === 'coleta'
+        ? 'Coleta confirmada pela empresa. Siga para o local de entrega.'
+        : 'Entrega confirmada pela empresa. Viagem concluída.';
+
+    try {
+      const { data, error } = await supabase.rpc(rpcName, {
+        p_solicitacao_id: room.requestId,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      const result =
+        data && typeof data === 'object'
+          ? (data as Record<string, unknown>)
+          : {};
+      const nextExecutionStatus =
+        typeof result.status_execucao === 'string'
+          ? (result.status_execucao as TripExecutionStatus)
+          : room.statusExecucao;
+
+      setChatRooms((current) =>
+        current.map((chatRoom) =>
+          chatRoom.id === room.id
+            ? {
+                ...chatRoom,
+                statusExecucao: nextExecutionStatus,
+                coletaConfirmadaEm:
+                  typeof result.coleta_confirmada_em === 'string'
+                    ? result.coleta_confirmada_em
+                    : chatRoom.coletaConfirmadaEm,
+                entregaConfirmadaEm:
+                  typeof result.entrega_confirmada_em === 'string'
+                    ? result.entrega_confirmada_em
+                    : chatRoom.entregaConfirmadaEm,
+              }
+            : chatRoom,
+        ),
+      );
+
+      const { data: messageData, error: messageError } = await supabase
+        .from('chat_messages')
+        .insert({
+          room_id: room.id,
+          sender_user_id: session.user.id,
+          message: statusMessage,
+        })
+        .select('id, room_id, sender_user_id, message, created_at')
+        .single();
+
+      if (messageError) {
+        throw messageError;
+      }
+
+      const persistedMessage = normalizeChatMessage(
+        messageData as ChatMessageRow,
+      );
+
+      setChatMessages((current) =>
+        room.id === activeChatRoomId ? [...current, persistedMessage] : current,
+      );
+      setChatRooms((current) =>
+        current.map((chatRoom) =>
+          chatRoom.id === room.id
+            ? {
+                ...chatRoom,
+                lastMessagePreview: persistedMessage.message,
+                lastMessageAt: persistedMessage.createdAt,
+              }
+            : chatRoom,
+        ),
+      );
+
+      await Promise.all([loadChatRooms(room.id), loadCompanyCargos()]);
+    } catch (error) {
+      setChatMessagesError(
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível confirmar esta etapa da viagem.',
+      );
+    } finally {
+      setIsUpdatingExecutionStatus(false);
     }
   };
 
@@ -2831,6 +3553,85 @@ function App() {
                         />
                       </label>
                     </div>
+                    <div className="field-grid field-grid--two route-map-fields">
+                      <label className="field-grid__full">
+                        Endereço de coleta
+                        <input
+                          type="text"
+                          placeholder="Rua, número, bairro, cidade - UF"
+                          value={form.pickupAddress}
+                          onChange={handleFieldChange('pickupAddress')}
+                        />
+                      </label>
+                      <label className="field-grid__full">
+                        Endereço de entrega
+                        <input
+                          type="text"
+                          placeholder="Rua, número, bairro, cidade - UF"
+                          value={form.deliveryAddress}
+                          onChange={handleFieldChange('deliveryAddress')}
+                        />
+                      </label>
+                      <div className="field-grid__full map-check-actions">
+                        <button
+                          className="button button--primary"
+                          type="button"
+                          onClick={() => openMapPicker('pickup')}
+                        >
+                          Selecionar coleta no mapa
+                        </button>
+                        <button
+                          className="button button--primary"
+                          type="button"
+                          onClick={() => openMapPicker('delivery')}
+                        >
+                          Selecionar entrega no mapa
+                        </button>
+                        <a
+                          className="button button--ghost"
+                          href={
+                            mapsUrlForNavigationPoint({
+                              address: buildNavigationAddress(
+                                form.pickupAddress,
+                                form.pickupCity,
+                                form.pickupState,
+                              ),
+                              latitude: null,
+                              longitude: null,
+                              placeId: null,
+                            }) ?? undefined
+                          }
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Conferir coleta no Google Maps
+                        </a>
+                        <a
+                          className="button button--ghost"
+                          href={
+                            mapsUrlForNavigationPoint({
+                              address: buildNavigationAddress(
+                                form.deliveryAddress,
+                                form.deliveryCity,
+                                form.deliveryState,
+                              ),
+                              latitude: null,
+                              longitude: null,
+                              placeId: null,
+                            }) ?? undefined
+                          }
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Conferir entrega no Google Maps
+                        </a>
+                      </div>
+                    </div>
+                    <p className="field-grid__helper">
+                      Selecione o ponto no mapa para preencher o endereço
+                      automaticamente. Sem token do Mapbox, você ainda
+                      pode digitar o endereço manualmente.
+                    </p>
                     {(isLoadingCities || citiesError) && (
                       <p className="field-grid__helper">
                         {isLoadingCities
@@ -3133,8 +3934,22 @@ function App() {
 
                           {(cargo.janela_carregamento ||
                             cargo.exigencias_motorista ||
-                            cargo.observacoes) && (
+                            cargo.observacoes ||
+                            cargo.coleta_endereco ||
+                            cargo.entrega_endereco) && (
                             <div className="cargo-card__notes">
+                              {cargo.coleta_endereco && (
+                                <p>
+                                  <strong>Endereço de coleta:</strong>{' '}
+                                  {cargo.coleta_endereco}
+                                </p>
+                              )}
+                              {cargo.entrega_endereco && (
+                                <p>
+                                  <strong>Endereço de entrega:</strong>{' '}
+                                  {cargo.entrega_endereco}
+                                </p>
+                              )}
                               {cargo.janela_carregamento && (
                                 <p>
                                   <strong>Janela:</strong>{' '}
@@ -3153,6 +3968,50 @@ function App() {
                                   {cargo.observacoes}
                                 </p>
                               )}
+                              <div className="cargo-card__map-actions">
+                                <a
+                                  className="button button--ghost"
+                                  href={
+                                    mapsUrlForNavigationPoint({
+                                      address:
+                                        cargo.coleta_endereco ??
+                                        buildNavigationAddress(
+                                          '',
+                                          cargo.cidade_coleta,
+                                          cargo.uf_coleta,
+                                        ),
+                                      latitude: cargo.coleta_latitude,
+                                      longitude: cargo.coleta_longitude,
+                                      placeId: cargo.coleta_place_id,
+                                    }) ?? undefined
+                                  }
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Abrir coleta no Google Maps
+                                </a>
+                                <a
+                                  className="button button--ghost"
+                                  href={
+                                    mapsUrlForNavigationPoint({
+                                      address:
+                                        cargo.entrega_endereco ??
+                                        buildNavigationAddress(
+                                          '',
+                                          cargo.cidade_entrega,
+                                          cargo.uf_entrega,
+                                        ),
+                                      latitude: cargo.entrega_latitude,
+                                      longitude: cargo.entrega_longitude,
+                                      placeId: cargo.entrega_place_id,
+                                    }) ?? undefined
+                                  }
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Abrir entrega no Google Maps
+                                </a>
+                              </div>
                             </div>
                           )}
 
@@ -3391,6 +4250,71 @@ function App() {
                             {chatMessagesError}
                           </div>
                         )}
+
+                        <div className="execution-panel">
+                          <div>
+                            <span>Etapa da viagem</span>
+                            <strong>
+                              {executionStatusLabel(
+                                activeChatRoom.statusExecucao,
+                              )}
+                            </strong>
+                            <p>{executionStatusDescription(activeChatRoom)}</p>
+                            {(activeChatRoom.coletaInformadaEm ||
+                              activeChatRoom.coletaConfirmadaEm ||
+                              activeChatRoom.entregaInformadaEm ||
+                              activeChatRoom.entregaConfirmadaEm) && (
+                              <small>
+                                {activeChatRoom.coletaInformadaEm &&
+                                  `Coleta informada: ${formatDateTime(activeChatRoom.coletaInformadaEm)}`}
+                                {activeChatRoom.coletaConfirmadaEm &&
+                                  ` | Coleta confirmada: ${formatDateTime(activeChatRoom.coletaConfirmadaEm)}`}
+                                {activeChatRoom.entregaInformadaEm &&
+                                  ` | Entrega informada: ${formatDateTime(activeChatRoom.entregaInformadaEm)}`}
+                                {activeChatRoom.entregaConfirmadaEm &&
+                                  ` | Entrega confirmada: ${formatDateTime(activeChatRoom.entregaConfirmadaEm)}`}
+                              </small>
+                            )}
+                          </div>
+                          {activeChatRoom.status === 'Aceita' &&
+                            activeChatRoom.statusExecucao ===
+                              'Retirada informada' && (
+                              <button
+                                className="button button--primary"
+                                type="button"
+                                disabled={isUpdatingExecutionStatus}
+                                onClick={() =>
+                                  handleConfirmExecutionStep(
+                                    activeChatRoom,
+                                    'coleta',
+                                  )
+                                }
+                              >
+                                {isUpdatingExecutionStatus
+                                  ? 'Confirmando...'
+                                  : 'Confirmar coleta'}
+                              </button>
+                          )}
+                          {activeChatRoom.status === 'Aceita' &&
+                            activeChatRoom.statusExecucao ===
+                              'Entrega informada' && (
+                              <button
+                                className="button button--primary"
+                                type="button"
+                                disabled={isUpdatingExecutionStatus}
+                                onClick={() =>
+                                  handleConfirmExecutionStep(
+                                    activeChatRoom,
+                                    'entrega',
+                                  )
+                                }
+                              >
+                                {isUpdatingExecutionStatus
+                                  ? 'Confirmando...'
+                                  : 'Confirmar entrega'}
+                              </button>
+                          )}
+                        </div>
 
                         {isLoadingChatMessages ? (
                           <div className="chat-window__empty">
@@ -3938,6 +4862,85 @@ function App() {
             </section>
           )}
         </main>
+
+        {mapPickerTarget && (
+          <div
+            className="map-picker"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Selecionar ponto no mapa"
+          >
+            <div className="map-picker__panel">
+              <div className="map-picker__header">
+                <div>
+                  <span>
+                    {mapPickerTarget === 'pickup'
+                      ? 'Local de coleta'
+                      : 'Local de entrega'}
+                  </span>
+                  <strong>Selecione um ponto no Mapbox</strong>
+                </div>
+                <button
+                  className="button button--ghost"
+                  type="button"
+                  onClick={() => setMapPickerTarget(null)}
+                >
+                  Fechar
+                </button>
+              </div>
+
+              <form
+                className="map-picker__search"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleMapSearch();
+                }}
+              >
+                <input
+                  type="text"
+                  value={mapPickerQuery}
+                  onChange={(event) => setMapPickerQuery(event.target.value)}
+                  placeholder="Pesquise por empresa, rua, número ou cidade"
+                />
+                <button
+                  className="button button--primary"
+                  type="submit"
+                  disabled={isSearchingMap || !mapPickerQuery.trim()}
+                >
+                  {isSearchingMap ? 'Buscando...' : 'Buscar'}
+                </button>
+                <p>
+                  Busque um endereço ou clique diretamente no mapa. O endereço
+                  da carga será preenchido automaticamente.
+                </p>
+              </form>
+
+              {mapPickerResults.length > 0 && (
+                <div className="map-picker__results">
+                  {mapPickerResults.map((feature) => (
+                    <button
+                      key={feature.id}
+                      className="map-picker__result"
+                      type="button"
+                      onClick={() => handleMapResultSelect(feature)}
+                    >
+                      <strong>{feature.text || feature.place_name}</strong>
+                      <span>{feature.place_name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {mapPickerError && (
+                <div className="form-feedback form-feedback--error">
+                  {mapPickerError}
+                </div>
+              )}
+
+              <div ref={mapPickerElementRef} className="map-picker__canvas" />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

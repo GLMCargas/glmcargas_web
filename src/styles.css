@@ -914,6 +914,10 @@ button {
   grid-column: 1 / -1;
 }
 
+.route-map-fields {
+  margin-top: 16px;
+}
+
 .city-autocomplete {
   position: relative;
 }
@@ -1518,6 +1522,37 @@ button {
   display: grid;
 }
 
+.execution-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin: 18px 20px 0;
+  border: 1px solid rgba(225, 111, 18, 0.16);
+  border-radius: 10px;
+  background: #fffaf5;
+  padding: 14px 16px;
+}
+
+.execution-panel span,
+.execution-panel small {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.execution-panel strong {
+  display: block;
+  margin-top: 4px;
+  color: #111827;
+  font-family: 'Barlow', sans-serif;
+}
+
+.execution-panel p {
+  margin: 6px 0 0;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
 .chat-messages {
   min-height: 0;
   display: flex;
@@ -1743,6 +1778,138 @@ button {
   margin-bottom: 18px;
 }
 
+.cargo-card__map-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.map-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.map-picker {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(17, 24, 39, 0.58);
+  padding: 24px;
+}
+
+.map-picker__panel {
+  width: min(980px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: hidden;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.3);
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(360px, 1fr);
+}
+
+.map-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid rgba(225, 111, 18, 0.14);
+  padding: 18px 20px;
+}
+
+.map-picker__header span,
+.map-picker__search p {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.map-picker__header strong {
+  display: block;
+  margin-top: 4px;
+  color: #111827;
+  font-family: 'Barlow', sans-serif;
+  font-size: 1.35rem;
+}
+
+.map-picker__search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 16px 20px;
+}
+
+.map-picker__search input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  color: #111827;
+  outline: none;
+}
+
+.map-picker__search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(225, 111, 18, 0.12);
+}
+
+.map-picker__search p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.map-picker__results {
+  display: grid;
+  gap: 8px;
+  max-height: 190px;
+  overflow: auto;
+  padding: 0 20px 14px;
+}
+
+.map-picker__result {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.map-picker__result:hover,
+.map-picker__result:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(225, 111, 18, 0.1);
+  outline: none;
+}
+
+.map-picker__result strong {
+  color: #111827;
+  font-size: 0.96rem;
+}
+
+.map-picker__result span {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.map-picker .form-feedback {
+  margin: 0 20px 12px;
+}
+
+.map-picker__canvas {
+  min-height: 420px;
+  background: #f3f4f6;
+}
+
 .cargo-card__notes p {
   margin: 0;
   color: var(--text-muted);
@@ -1947,6 +2114,15 @@ button {
     min-height: 360px;
   }
 
+  .execution-panel {
+    grid-template-columns: 1fr;
+    margin-inline: 14px;
+  }
+
+  .execution-panel .button {
+    width: 100%;
+  }
+
   .chat-message {
     max-width: 100%;
   }
@@ -2000,5 +2176,35 @@ button {
 
   .admin-toolbar__button {
     width: 100%;
+  }
+
+  .map-picker {
+    padding: 10px;
+  }
+
+  .map-picker__panel {
+    max-height: calc(100vh - 20px);
+    grid-template-rows: auto auto auto auto minmax(300px, 1fr);
+  }
+
+  .map-picker__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .map-picker__header .button {
+    width: 100%;
+  }
+
+  .map-picker__search {
+    grid-template-columns: 1fr;
+  }
+
+  .map-picker__search .button {
+    width: 100%;
+  }
+
+  .map-picker__canvas {
+    min-height: 300px;
   }
 }
