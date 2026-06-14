@@ -33,10 +33,12 @@ jobs:
         run: |
           test -n "$VITE_SUPABASE_URL"
           test -n "$VITE_SUPABASE_PUBLISHABLE_KEY"
+          test -n "$VITE_MAPBOX_ACCESS_TOKEN"
           npm run build
         env:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL || vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY || vars.VITE_SUPABASE_PUBLISHABLE_KEY || secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || vars.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_MAPBOX_ACCESS_TOKEN: ${{ vars.VITE_MAPBOX_ACCESS_TOKEN || secrets.VITE_MAPBOX_ACCESS_TOKEN || vars.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || secrets.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN }}
 
       - name: Deploy live channel
         uses: FirebaseExtended/action-hosting-deploy@v0
