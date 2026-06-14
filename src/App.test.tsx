@@ -395,11 +395,23 @@ const renderApp = async () => {
 }
 
 const defaultCompanyProfile = {
+  tipo_pessoa: 'juridica',
   nome: 'GLM Transportes',
+  cpf: null,
   cnpj: '12.345.678/0001-90',
   responsavel: 'Luisa Scherer',
   telefone: '(51) 99999-0000',
   email: 'operacao@glm.com.br',
+  cep: null,
+  logradouro: null,
+  numero_endereco: null,
+  complemento: null,
+  bairro: null,
+  cidade: null,
+  uf: null,
+  vinculado_nome: 'Luisa Scherer',
+  vinculado_cpf: null,
+  vinculado_cnpj: null,
 }
 
 const getPublishPayload = () => {
@@ -464,16 +476,31 @@ describe('GLM Cargas web', () => {
     const user = userEvent.setup()
 
     await user.click(screen.getByRole('button', { name: /Clique aqui/i }))
+    await user.type(
+      screen.getByLabelText(/Razão social/i),
+      'Nova GLM Transportes',
+    )
+    await user.type(screen.getByLabelText(/^CNPJ$/i), '12345678000190')
+    await user.type(screen.getByLabelText(/Telefone/i), '51999990000')
     await user.type(screen.getByLabelText(/E-mail de acesso/i), 'nova@glm.com.br')
     await user.type(screen.getByLabelText(/Senha/i), '123456')
-    await user.click(
-      screen.getByRole('button', { name: /Criar conta da empresa/i }),
-    )
+    const createButtons = screen.getAllByRole('button', { name: /Criar conta/i })
+    await user.click(createButtons[createButtons.length - 1])
 
     await waitFor(() =>
       expect(supabaseMock.auth.signUp).toHaveBeenCalledWith({
         email: 'nova@glm.com.br',
         password: '123456',
+        options: {
+          data: {
+            tipo_pessoa: 'juridica',
+            nome: 'Nova GLM Transportes',
+            cpf: '',
+            cnpj: '12345678000190',
+            telefone: '51999990000',
+            email: 'nova@glm.com.br',
+          },
+        },
       }),
     )
     expect(
@@ -487,16 +514,15 @@ describe('GLM Cargas web', () => {
 
     const user = await renderApp()
 
-    await screen.findByText(/Dashboard da empresa/i)
-    await user.click(screen.getByRole('button', { name: /Perfil da empresa/i }))
+    await screen.findByText(/Dashboard da conta/i)
+    await user.click(screen.getByRole('button', { name: /Perfil da conta/i }))
 
     expect(
       await screen.findByDisplayValue('GLM Transportes'),
     ).toBeInTheDocument()
     expect(screen.getByDisplayValue('12.345.678/0001-90')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('Luisa Scherer')).toBeInTheDocument()
     expect(screen.getByDisplayValue('(51) 99999-0000')).toBeInTheDocument()
-    expect(screen.getByText(/Perfil em andamento/i)).toBeInTheDocument()
+    expect(screen.getByText(/Incompleto/i)).toBeInTheDocument()
   })
 
   it('lista cargas da empresa, formata datas/valores e marca motorista aceito', async () => {
@@ -546,7 +572,7 @@ describe('GLM Cargas web', () => {
     await user.click(screen.getByRole('button', { name: /Salvar rascunho/i }))
 
     await waitFor(() =>
-      expect(screen.getByText(/Dados principais usados/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Dados principais da conta/i)).toBeInTheDocument(),
     )
     expect(
       supabaseMock.rpc.mock.calls.some(
@@ -585,15 +611,26 @@ describe('GLM Cargas web', () => {
     await waitFor(() =>
       expect(getPublishPayload()).toMatchObject({
         p_status: 'publicada',
-        p_empresa_nome: 'GLM Transportes',
-        p_empresa_cnpj: '12.345.678/0001-90',
-        p_empresa_responsavel: 'Luisa Scherer',
-        p_empresa_telefone: '(51) 99999-0000',
-        p_empresa_email: 'operacao@glm.com.br',
+        p_tipo_pessoa: 'juridica',
+        p_nome: 'GLM Transportes',
+        p_cpf: null,
+        p_cnpj: '12345678000190',
+        p_telefone: '51999990000',
+        p_email: 'operacao@glm.com.br',
         p_cidade_coleta: 'Campinas',
         p_uf_coleta: 'SP',
+        p_data_coleta: null,
+        p_coleta_endereco: 'Campinas, SP, Brasil',
+        p_coleta_latitude: null,
+        p_coleta_longitude: null,
+        p_coleta_place_id: null,
         p_cidade_entrega: 'Curitiba',
         p_uf_entrega: 'PR',
+        p_prazo_entrega: null,
+        p_entrega_endereco: 'Curitiba, PR, Brasil',
+        p_entrega_latitude: null,
+        p_entrega_longitude: null,
+        p_entrega_place_id: null,
         p_produto: 'Bobinas de aco',
         p_peso_total: '28 toneladas',
         p_valor_frete: 1234.56,
