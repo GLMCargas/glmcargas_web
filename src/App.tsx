@@ -964,6 +964,70 @@ function getAccountProfileValidationMessage(profile: AccountProfileState) {
   return '';
 }
 
+function getCargoValidationMessage(form: FormState) {
+  if (!form.pickupCity.trim()) {
+    return 'Complete o campo cidade de coleta.';
+  }
+
+  if (!form.pickupState.trim()) {
+    return 'Complete o campo UF de coleta.';
+  }
+
+  if (!form.pickupDate.trim()) {
+    return 'Complete o campo data de coleta.';
+  }
+
+  if (!form.pickupAddress.trim()) {
+    return 'Complete o campo endereço de coleta.';
+  }
+
+  if (!form.deliveryCity.trim()) {
+    return 'Complete o campo cidade de entrega.';
+  }
+
+  if (!form.deliveryState.trim()) {
+    return 'Complete o campo UF de entrega.';
+  }
+
+  if (!form.deliveryDate.trim()) {
+    return 'Complete o campo prazo de entrega.';
+  }
+
+  if (!form.deliveryAddress.trim()) {
+    return 'Complete o campo endereço de entrega.';
+  }
+
+  if (!form.cargoType.trim()) {
+    return 'Complete o campo produto / mercadoria.';
+  }
+
+  if (!form.cargoWeight.trim()) {
+    return 'Complete o campo peso total.';
+  }
+
+  if (!form.freightValue.trim()) {
+    return 'Complete o campo valor do frete.';
+  }
+
+  if (!form.vehicleType.trim()) {
+    return 'Complete o campo tipo de veículo.';
+  }
+
+  if (!form.bodyType.trim()) {
+    return 'Complete o campo tipo de carroceria.';
+  }
+
+  if (!form.loadCategory.trim()) {
+    return 'Complete o campo categoria da carga.';
+  }
+
+  if (!form.loadingWindow.trim()) {
+    return 'Complete o campo janela de carregamento.';
+  }
+
+  return '';
+}
+
 function getLinkedEntitySectionTitle(personType: PersonType) {
   return personType === 'fisica'
     ? 'Empresa vinculada'
@@ -2534,12 +2598,22 @@ function App() {
     setSubmitMessage('');
     setSubmitError('');
 
-    const hasCompleteAccountProfile = hasRequiredAccountIdentity(accountProfile);
+    const hasCompleteAccountProfile = isAccountProfileComplete(accountProfile);
 
     if (!hasCompleteAccountProfile) {
       setIsSubmitting(false);
-      setSubmitError('Preencha os dados principais da conta antes de adicionar uma carga.');
+      setSubmitError(
+        'Complete seu perfil com os dados principais e o endereço antes de adicionar uma carga.',
+      );
       setActiveSection('perfil');
+      return;
+    }
+
+    const cargoValidationMessage = getCargoValidationMessage(form);
+
+    if (cargoValidationMessage) {
+      setIsSubmitting(false);
+      setSubmitError(cargoValidationMessage);
       return;
     }
 
@@ -2628,6 +2702,13 @@ function App() {
       ) {
         setSubmitError(
           'A função de atualização ainda não foi aplicada no Supabase. Rode o SQL novo antes de editar cargas existentes.',
+        );
+        return;
+      }
+
+      if (normalizedError.includes('function public.salvar_conta_web')) {
+        setSubmitError(
+          'O banco local está desatualizado para esta tela. Rode o schema ou as migrations mais recentes do Supabase.',
         );
         return;
       }
@@ -3067,6 +3148,11 @@ function App() {
   const accountDocumentLabel = getAccountDocumentLabel(accountProfile.personType);
   const accountDocumentValue = getAccountDocumentValue(accountProfile);
   const accountProfileComplete = isAccountProfileComplete(accountProfile);
+  const accountProfileValidationMessage = accountProfileComplete
+    ? ''
+    : getAccountProfileValidationMessage(accountProfile);
+  const isCargoCreationBlocked =
+    !accountProfileComplete && editingCargoId === null;
 
   if (isLoadingSession) {
     return (
@@ -3391,10 +3477,17 @@ function App() {
               <section className="section section--form" id="publicar">
                 <div className="section-hero">
                   <div className="section-heading section-heading--compact">
-                    <span>Nova publicação</span>
+                    <span>
+                      {isCargoCreationBlocked
+                        ? 'Perfil incompleto'
+                        : editingCargoId
+                          ? 'Editar publicação'
+                          : 'Nova publicação'}
+                    </span>
                     <h2>
-                      Cadastre uma carga com os principais dados que impactam a
-                      contratação.
+                      {isCargoCreationBlocked
+                        ? 'Complete o perfil da conta antes de adicionar uma carga.'
+                        : 'Cadastre uma carga com os principais dados que impactam a contratação.'}
                     </h2>
                   </div>
                   <span className="section-hero__icon">
@@ -3433,9 +3526,30 @@ function App() {
                     )}
                   </div>
 
-                  <div className="form-block">
-                    <h3>Rota</h3>
-                    <div className="field-grid field-grid--three">
+                  {isCargoCreationBlocked ? (
+                    <div className="empty-state">
+                      <span className="empty-state__icon">
+                        <SidebarIcon name="perfil" />
+                      </span>
+                      <strong>Complete seu perfil para adicionar uma carga</strong>
+                      <p>
+                        {accountProfileValidationMessage
+                          ? `${accountProfileValidationMessage} Depois disso, volte aqui para preencher os dados da carga.`
+                          : 'Preencha os dados principais e o endereço da conta antes de publicar uma nova carga.'}
+                      </p>
+                      <button
+                        className="button button--primary"
+                        type="button"
+                        onClick={() => setActiveSection('perfil')}
+                      >
+                        Ir para perfil
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="form-block">
+                        <h3>Rota</h3>
+                        <div className="field-grid field-grid--three">
                       <label>
                         Cidade de coleta
                         <div className="city-autocomplete">
@@ -3489,6 +3603,7 @@ function App() {
                       <label>
                         Data de coleta
                         <input
+                          required
                           type="date"
                           value={form.pickupDate}
                           onChange={handleFieldChange('pickupDate')}
@@ -3547,6 +3662,7 @@ function App() {
                       <label>
                         Prazo de entrega
                         <input
+                          required
                           type="date"
                           value={form.deliveryDate}
                           onChange={handleFieldChange('deliveryDate')}
@@ -3557,6 +3673,7 @@ function App() {
                       <label className="field-grid__full">
                         Endereço de coleta
                         <input
+                          required
                           type="text"
                           placeholder="Rua, número, bairro, cidade - UF"
                           value={form.pickupAddress}
@@ -3566,6 +3683,7 @@ function App() {
                       <label className="field-grid__full">
                         Endereço de entrega
                         <input
+                          required
                           type="text"
                           placeholder="Rua, número, bairro, cidade - UF"
                           value={form.deliveryAddress}
@@ -3667,6 +3785,7 @@ function App() {
                       <label>
                         Valor do frete
                         <input
+                          required
                           type="text"
                           inputMode="numeric"
                           placeholder="0,00"
@@ -3733,6 +3852,7 @@ function App() {
                       <label>
                         Janela de carregamento
                         <input
+                          required
                           type="text"
                           placeholder="Ex.: 08:00 as 14:00"
                           value={form.loadingWindow}
@@ -3783,6 +3903,8 @@ function App() {
                       {isSubmitting ? 'Salvando...' : 'Salvar rascunho'}
                     </button>
                   </div>
+                    </>
+                  )}
                 </form>
               </section>
             </main>
@@ -4701,7 +4823,9 @@ function App() {
                     type="button"
                     onClick={() => setActiveSection('nova-carga')}
                   >
-                    Usar dados e adicionar carga
+                    {accountProfileComplete
+                      ? 'Usar dados e adicionar carga'
+                      : 'Ver publicação bloqueada'}
                   </button>
                 </div>
               </form>
