@@ -2,6 +2,12 @@ drop function if exists public.salvar_conta_web(
   text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text
 );
 
+alter table public.empresas_web
+  alter column cnpj drop not null;
+
+alter table public.empresas_web
+  alter column responsavel drop not null;
+
 create or replace function public.salvar_conta_web(
   p_tipo_pessoa text,
   p_nome text,

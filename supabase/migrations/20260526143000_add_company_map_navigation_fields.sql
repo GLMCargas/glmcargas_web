@@ -19,14 +19,62 @@ end;
 $$;
 
 alter table if exists public."Viagens"
+add column if not exists carga_web_id uuid default gen_random_uuid(),
+add column if not exists empresa text,
+add column if not exists empresa_user_id uuid,
+add column if not exists status text,
+add column if not exists origem_cidade text,
+add column if not exists origem_uf text,
+add column if not exists data_coleta date,
 add column if not exists coleta_endereco text,
 add column if not exists coleta_latitude double precision,
 add column if not exists coleta_longitude double precision,
 add column if not exists coleta_place_id text,
+add column if not exists destino_cidade text,
+add column if not exists destino_uf text,
+add column if not exists data_limite_entrega timestamptz,
 add column if not exists entrega_endereco text,
 add column if not exists entrega_latitude double precision,
 add column if not exists entrega_longitude double precision,
-add column if not exists entrega_place_id text;
+add column if not exists entrega_place_id text,
+add column if not exists produto text,
+add column if not exists peso_texto text,
+add column if not exists valor numeric,
+add column if not exists valor_texto text,
+add column if not exists tipo_veiculo text,
+add column if not exists tipo_carroceria text,
+add column if not exists categoria_carga text,
+add column if not exists janela_carregamento text,
+add column if not exists exigencias_motorista text,
+add column if not exists observacoes text,
+add column if not exists compatibilidade_veiculo text,
+add column if not exists updated_at timestamptz;
+
+update public."Viagens"
+set carga_web_id = gen_random_uuid()
+where carga_web_id is null;
+
+alter table if exists public."Viagens"
+alter column carga_web_id set default gen_random_uuid(),
+alter column carga_web_id set not null;
+
+create unique index if not exists viagens_carga_web_id_key
+on public."Viagens" (carga_web_id);
+
+update public."Viagens"
+set status = 'publicada'
+where status is null;
+
+alter table if exists public."Viagens"
+alter column status set default 'publicada',
+alter column status set not null;
+
+alter table if exists public."Viagens"
+drop constraint if exists viagens_status_check;
+
+alter table if exists public."Viagens"
+add constraint viagens_status_check
+check (status in ('publicada', 'rascunho', 'encerrada'));
 
 alter table if exists public."Viagens"
 drop constraint if exists viagens_coleta_coords_valid;
@@ -69,6 +117,10 @@ drop function if exists public.publicar_carga_web(
   text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
 );
 
+drop function if exists public.publicar_carga_web(
+  text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
+);
+
 create or replace function public.publicar_carga_web(
   p_status text,
   p_tipo_pessoa text,
@@ -102,14 +154,14 @@ create or replace function public.publicar_carga_web(
   p_exigencias_motorista text,
   p_observacoes text
 )
-returns bigint
+returns uuid
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   v_conta_id uuid;
-  v_carga_id bigint;
+  v_carga_id uuid;
   v_nome_conta text;
   v_conta_auth_user_id uuid;
   v_compatibilidade text;
@@ -137,6 +189,16 @@ begin
     p_cnpj,
     p_telefone,
     p_email,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
     null
   );
 
@@ -214,7 +276,7 @@ begin
     nullif(trim(coalesce(p_observacoes, '')), ''),
     v_compatibilidade
   )
-  returning id into v_carga_id;
+  returning carga_web_id into v_carga_id;
 
   return v_carga_id;
 end;
@@ -232,8 +294,16 @@ drop function if exists public.atualizar_carga_web(
   bigint, text, text, text, text, text, text, text, text, text, date, text, text, date, text, text, numeric, text, text, text, text, text, text, text
 );
 
+drop function if exists public.atualizar_carga_web(
+  bigint, text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
+);
+
+drop function if exists public.atualizar_carga_web(
+  uuid, text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
+);
+
 create or replace function public.atualizar_carga_web(
-  p_carga_id bigint,
+  p_carga_id uuid,
   p_status text,
   p_tipo_pessoa text,
   p_nome text,
@@ -266,7 +336,7 @@ create or replace function public.atualizar_carga_web(
   p_exigencias_motorista text,
   p_observacoes text
 )
-returns bigint
+returns uuid
 language plpgsql
 security definer
 set search_path = public
@@ -274,7 +344,7 @@ as $$
 declare
   v_auth_user_id uuid;
   v_conta_id uuid;
-  v_carga_id bigint;
+  v_carga_id uuid;
   v_has_accepted_driver boolean;
   v_nome_conta text;
   v_compatibilidade text;
@@ -308,6 +378,16 @@ begin
     p_cnpj,
     p_telefone,
     p_email,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
     null
   );
 
@@ -324,7 +404,8 @@ begin
   select exists (
     select 1
     from public.solicitacoes_viagem s
-    where s.viagem_id = p_carga_id
+    join public."Viagens" v on v.id = s.viagem_id
+    where v.carga_web_id = p_carga_id
       and s.status = 'Aceita'
   ) into v_has_accepted_driver;
 
@@ -368,9 +449,9 @@ begin
     observacoes = nullif(trim(coalesce(p_observacoes, '')), ''),
     compatibilidade_veiculo = v_compatibilidade,
     updated_at = timezone('utc', now())
-  where id = p_carga_id
+  where carga_web_id = p_carga_id
     and empresa_user_id = v_auth_user_id
-  returning id into v_carga_id;
+  returning carga_web_id into v_carga_id;
 
   if v_carga_id is null then
     raise exception 'Nao foi possivel atualizar a carga.';
@@ -381,18 +462,18 @@ end;
 $$;
 
 revoke all on function public.atualizar_carga_web(
-  bigint, text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
+  uuid, text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
 ) from public;
 
 grant execute on function public.atualizar_carga_web(
-  bigint, text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
+  uuid, text, text, text, text, text, text, text, text, text, date, text, double precision, double precision, text, text, text, date, text, double precision, double precision, text, text, text, numeric, text, text, text, text, text, text, text
 ) to authenticated, service_role;
 
 drop function if exists public.minhas_cargas_web();
 
 create or replace function public.minhas_cargas_web()
 returns table (
-  id bigint,
+  id uuid,
   status text,
   empresa_nome text,
   cidade_coleta text,
@@ -427,7 +508,7 @@ security definer
 set search_path = public
 as $$
   select
-    v.id,
+    v.carga_web_id as id,
     coalesce(v.status, 'publicada') as status,
     coalesce(nullif(trim(v.empresa), ''), e.nome, '') as empresa_nome,
     coalesce(v.origem_cidade, '') as cidade_coleta,
@@ -464,6 +545,48 @@ $$;
 
 revoke all on function public.minhas_cargas_web() from public;
 grant execute on function public.minhas_cargas_web() to authenticated, service_role;
+
+drop function if exists public.atualizar_status_carga_web(bigint, text);
+drop function if exists public.atualizar_status_carga_web(uuid, text);
+
+create or replace function public.atualizar_status_carga_web(
+  p_carga_id uuid,
+  p_status text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_carga_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'Usuario nao autenticado.';
+  end if;
+
+  if p_status not in ('publicada', 'rascunho', 'encerrada') then
+    raise exception 'Status invalido.';
+  end if;
+
+  update public."Viagens" v
+  set
+    status = p_status,
+    updated_at = timezone('utc', now())
+  where v.carga_web_id = p_carga_id
+    and v.empresa_user_id = auth.uid()
+  returning v.carga_web_id into v_carga_id;
+
+  if v_carga_id is null then
+    raise exception 'Carga nao encontrada para a conta autenticada.';
+  end if;
+
+  return v_carga_id;
+end;
+$$;
+
+revoke all on function public.atualizar_status_carga_web(uuid, text) from public;
+grant execute on function public.atualizar_status_carga_web(uuid, text) to authenticated, service_role;
 
 update public.solicitacoes_viagem
 set status_execucao = 'Aguardando retirada'

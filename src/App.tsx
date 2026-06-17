@@ -173,7 +173,7 @@ type TripExecutionStatus =
   | 'Cancelada';
 
 type CompanyCargo = {
-  id: number;
+  id: string;
   status: CargoStatus;
   empresa_nome: string;
   cidade_coleta: string;
@@ -1197,8 +1197,8 @@ function App() {
   const [companyCargos, setCompanyCargos] = useState<CompanyCargo[]>([]);
   const [isLoadingCargos, setIsLoadingCargos] = useState(false);
   const [cargoListError, setCargoListError] = useState('');
-  const [actionCargoId, setActionCargoId] = useState<number | null>(null);
-  const [editingCargoId, setEditingCargoId] = useState<number | null>(null);
+  const [actionCargoId, setActionCargoId] = useState<string | null>(null);
+  const [editingCargoId, setEditingCargoId] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminFilters, setAdminFilters] =
     useState<AdminFilters>(initialAdminFilters);
@@ -2735,7 +2735,7 @@ function App() {
   };
 
   const handleCargoStatusChange = async (
-    cargoId: number,
+    cargoId: string,
     nextStatus: CargoStatus,
   ) => {
     const targetCargo = companyCargos.find((cargo) => cargo.id === cargoId);
